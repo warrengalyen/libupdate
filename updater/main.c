@@ -1,15 +1,20 @@
-#include <stdio.h>
+#include <stddef.h>
 
 #include <update.h>
 
 int main(void)
 {
-    if (update_init() != 0) {
-        return 1;
+    const update_options_t opts = {
+        "https://example.invalid/updates",
+        "updater",
+        NULL,
+        NULL,
+        NULL,
+    };
+
+    if (update_init(&opts) != UPDATE_OK) {
+        return UPDATE_ERROR;
     }
 
-    puts("updater: stub run OK");
-
-    update_shutdown();
-    return 0;
+    return update_perform();
 }
