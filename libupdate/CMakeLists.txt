@@ -4,6 +4,13 @@ add_library(update SHARED
     src/platform_fs_stub.c
 )
 
+# update.c uses pthread except on native Windows (SRWLOCK). Cygwin may set WIN32.
+if (WIN32 AND NOT CYGWIN)
+else ()
+    find_package(Threads REQUIRED)
+    target_link_libraries(update PRIVATE Threads::Threads)
+endif ()
+
 target_include_directories(update
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
