@@ -1,7 +1,7 @@
 add_library(update SHARED
     src/update.c
-    src/platform_process_stub.c
-    src/platform_fs_stub.c
+    src/platform_process.c
+    src/platform_fs.c
 )
 
 # update.c uses pthread except on native Windows (SRWLOCK). Cygwin may set WIN32.

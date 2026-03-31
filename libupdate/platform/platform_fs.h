@@ -1,15 +1,20 @@
 #ifndef PLATFORM_FS_H
 #define PLATFORM_FS_H
 
+#include "platform_errors.h"
+
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * Filesystem abstraction (declarations only; implementations are stubs).
- */
-int platform_fs_exists_stub(void);
-int platform_fs_remove_stub(void);
+int platform_fs_get_executable_path(char *out, size_t out_size);
+int platform_fs_get_executable_dir(char *out, size_t out_size);
+
+int platform_fs_create_directory_recursive(const char *path);
+int platform_fs_move_path(const char *src, const char *dst);
+int platform_fs_remove_path(const char *path);
 
 #ifdef __cplusplus
 }
