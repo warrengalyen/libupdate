@@ -27,3 +27,14 @@ set_target_properties(update PROPERTIES
 if (WIN32 AND (MINGW OR MSYS))
     set_target_properties(update PROPERTIES PREFIX "")
 endif ()
+
+set(LIBUPDATE_ROOT_BIN_DIR "${CMAKE_SOURCE_DIR}/bin")
+add_custom_command(
+    TARGET update
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${LIBUPDATE_ROOT_BIN_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:update>"
+        "${LIBUPDATE_ROOT_BIN_DIR}/"
+    COMMENT "Copy update -> ${LIBUPDATE_ROOT_BIN_DIR}"
+)
