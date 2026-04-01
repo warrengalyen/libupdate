@@ -4,6 +4,14 @@ add_library(update SHARED
     src/platform_fs.c
 )
 
+if (WIN32 AND NOT CYGWIN)
+    target_sources(update PRIVATE src/http_transport_winhttp.c)
+    target_link_libraries(update PRIVATE winhttp)
+else ()
+    target_sources(update PRIVATE src/http_transport_socket.c)
+    target_compile_definitions(update PRIVATE _DEFAULT_SOURCE)
+endif ()
+
 # update.c uses pthread except on native Windows (SRWLOCK). Cygwin may set WIN32.
 if (WIN32 AND NOT CYGWIN)
 else ()
@@ -17,6 +25,7 @@ target_include_directories(update
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/platform
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 if (WIN32)

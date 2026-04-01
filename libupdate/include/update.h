@@ -49,6 +49,15 @@ typedef enum {
 } update_status_t;
 
 /**
+ * Optional download progress hook. bytes_total_hint is 0 when the size is unknown.
+ */
+typedef void (*update_download_progress_fn)(unsigned long long bytes_done,
+    unsigned long long bytes_total_hint,
+    void *user);
+
+UPDATE_API void update_set_download_progress_callback(update_download_progress_fn cb, void *user);
+
+/**
  * All functions return int status codes (see update_status_t). Additional
  * values may be added in the future; treat unknown positive codes as UPDATE_ERROR.
  *

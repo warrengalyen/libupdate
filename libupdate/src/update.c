@@ -1,5 +1,7 @@
 #include "update.h"
 
+#include "http_transport.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -38,6 +40,8 @@ typedef struct {
     char *install_dir;
     char *temp_dir;
     char *channel;
+    update_http_progress_fn progress_cb;
+    void *progress_userdata;
 } update_context_t;
 
 static update_context_t s_ctx;
@@ -162,6 +166,18 @@ int update_init(const update_options_t *opts)
     return UPDATE_OK;
 }
 
+void update_set_download_progress_callback(update_download_progress_fn cb, void *user)
+{
+    ctx_lock();
+    if (!is_initialized()) {
+        ctx_unlock();
+        return;
+    }
+    s_ctx.progress_cb = (update_http_progress_fn)cb;
+    s_ctx.progress_userdata = user;
+    ctx_unlock();
+}
+
 int update_check(update_info_t *out)
 {
     int result;
@@ -187,6 +203,11 @@ int update_check(update_info_t *out)
 
 int update_download(const char *dest_path)
 {
+    char *url_copy = NULL;
+    update_http_progress_fn prog;
+    void *prog_ud;
+    int http_rc;
+
     ctx_lock();
 
     if (get_context() == NULL) {
@@ -199,8 +220,25 @@ int update_download(const char *dest_path)
         return UPDATE_ERROR;
     }
 
+    if (s_ctx.update_url == NULL || s_ctx.update_url[0] == '\0') {
+        ctx_unlock();
+        return UPDATE_ERROR;
+    }
+
+    url_copy = dup_str(s_ctx.update_url);
+    prog = s_ctx.progress_cb;
+    prog_ud = s_ctx.progress_userdata;
+
     ctx_unlock();
-    return UPDATE_ERROR;
+
+    if (url_copy == NULL) {
+        return UPDATE_ERROR;
+    }
+
+    http_rc = update_http_stream_download(url_copy, dest_path, prog, prog_ud);
+    free(url_copy);
+
+    return http_rc == 0 ? UPDATE_OK : UPDATE_ERROR;
 }
 
 int update_apply(const char *package_path)
