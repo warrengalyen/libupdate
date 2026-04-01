@@ -33,6 +33,11 @@ typedef struct {
     const char *install_dir; /* optional: may be NULL */
     const char *temp_dir;    /* optional: may be NULL */
     const char *channel;     /* optional: may be NULL */
+    /**
+     * Optional: 64 hexadecimal SHA-256 digest (ASCII). If set, update_download
+     * verifies the file at dest_path after a successful transfer.
+     */
+    const char *expected_sha256;
 } update_options_t;
 
 typedef struct {
@@ -56,6 +61,12 @@ typedef void (*update_download_progress_fn)(unsigned long long bytes_done,
     void *user);
 
 UPDATE_API void update_set_download_progress_callback(update_download_progress_fn cb, void *user);
+
+/**
+ * Verifies file against a 64-character hex SHA-256 digest (optional leading /
+ * trailing ASCII whitespace is ignored).
+ */
+UPDATE_API int update_verify(const char *file, const char *expected_hash);
 
 /**
  * All functions return int status codes (see update_status_t). Additional

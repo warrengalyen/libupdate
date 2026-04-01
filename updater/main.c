@@ -10,6 +10,7 @@ int main(void)
         NULL,
         NULL,
         NULL,
+        NULL,
     };
 
     if (update_init(&opts) != UPDATE_OK) {
