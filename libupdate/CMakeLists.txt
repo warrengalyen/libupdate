@@ -1,5 +1,6 @@
 add_library(update SHARED
     src/update.c
+    src/update_ops.c
     src/update_extract.c
     src/sha256.c
     src/platform_process.c

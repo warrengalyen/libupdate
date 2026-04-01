@@ -75,6 +75,21 @@ UPDATE_API int update_verify(const char *file, const char *expected_hash);
 UPDATE_API int update_extract(const char *zip_path, const char *dest_dir);
 
 /**
+ * Waits until the process identified by parent_pid is no longer running.
+ * Windows: OpenProcess + WaitForSingleObject. POSIX: poll kill(pid, 0) until ESRCH.
+ */
+UPDATE_API int update_wait_for_parent_exit(int parent_pid);
+
+/** Recursively copies src_dir into dst_dir with retries on transient failures. */
+UPDATE_API int update_copy_tree(const char *src_dir, const char *dst_dir);
+
+/** Recursively removes a file or directory tree with retries. */
+UPDATE_API int update_remove_tree(const char *path);
+
+/** Starts executable_path detached (argv is [path, NULL]). */
+UPDATE_API int update_relaunch_app(const char *executable_path);
+
+/**
  * All functions return int status codes (see update_status_t). Additional
  * values may be added in the future; treat unknown positive codes as UPDATE_ERROR.
  *

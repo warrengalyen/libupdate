@@ -1,21 +1,172 @@
-#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <update.h>
 
-int main(void)
-{
-    const update_options_t opts = {
-        "https://example.invalid/updates",
-        "updater",
-        NULL,
-        NULL,
-        NULL,
-        NULL,
-    };
+#define PATH_CAP 4096
 
-    if (update_init(&opts) != UPDATE_OK) {
-        return UPDATE_ERROR;
+static void usage(FILE *out, const char *prog)
+{
+    fprintf(out,
+        "Usage: %s --install <zip_path> --target <install_dir> --pid <parent_pid> --app <app_name>\n",
+        prog);
+}
+
+static int streq(const char *a, const char *b)
+{
+    return strcmp(a, b) == 0;
+}
+
+static int is_absolute_app_path(const char *app)
+{
+    if (app == NULL || app[0] == '\0') {
+        return 0;
     }
 
-    return update_perform();
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    if (app[0] != '\0' && app[1] == ':') {
+        return 1;
+    }
+    if (app[0] == '\\' && app[1] == '\\') {
+        return 1;
+    }
+#endif
+    return app[0] == '/';
+}
+
+static int join_install_app(const char *install_dir, const char *app, char *out, size_t cap)
+{
+    int n;
+
+    if (is_absolute_app_path(app) != 0) {
+        n = snprintf(out, cap, "%s", app);
+    } else {
+        n = snprintf(out, cap, "%s/%s", install_dir, app);
+    }
+
+    if (n < 0 || (size_t)n >= cap) {
+        return -1;
+    }
+    return 0;
+}
+
+static int parse_args(int argc, char **argv,
+    const char **out_zip,
+    const char **out_target,
+    int *out_pid,
+    const char **out_app)
+{
+    int i;
+    const char *zip = NULL;
+    const char *target = NULL;
+    const char *app = NULL;
+    int pid = -1;
+
+    for (i = 1; i < argc; i++) {
+        if (streq(argv[i], "--install")) {
+            if (i + 1 >= argc) {
+                return -1;
+            }
+            zip = argv[++i];
+            continue;
+        }
+        if (streq(argv[i], "--target")) {
+            if (i + 1 >= argc) {
+                return -1;
+            }
+            target = argv[++i];
+            continue;
+        }
+        if (streq(argv[i], "--pid")) {
+            if (i + 1 >= argc) {
+                return -1;
+            }
+            pid = atoi(argv[++i]);
+            continue;
+        }
+        if (streq(argv[i], "--app")) {
+            if (i + 1 >= argc) {
+                return -1;
+            }
+            app = argv[++i];
+            continue;
+        }
+        return -1;
+    }
+
+    if (zip == NULL || zip[0] == '\0' || target == NULL || target[0] == '\0' || app == NULL
+        || app[0] == '\0' || pid <= 0) {
+        return -1;
+    }
+
+    *out_zip = zip;
+    *out_target = target;
+    *out_pid = pid;
+    *out_app = app;
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    const char *zip_path;
+    const char *install_dir;
+    const char *app_arg;
+    int parent_pid;
+    char staging[PATH_CAP];
+    char backup[PATH_CAP];
+    char app_path[PATH_CAP];
+    int n;
+
+    if (parse_args(argc, argv, &zip_path, &install_dir, &parent_pid, &app_arg) != 0) {
+        usage(stderr, argv[0] != NULL ? argv[0] : "updater");
+        return (int)UPDATE_ERROR;
+    }
+
+    n = snprintf(staging, sizeof staging, "%s.update_staging", install_dir);
+    if (n < 0 || (size_t)n >= sizeof staging) {
+        return (int)UPDATE_ERROR;
+    }
+
+    n = snprintf(backup, sizeof backup, "%s.update_backup", install_dir);
+    if (n < 0 || (size_t)n >= sizeof backup) {
+        return (int)UPDATE_ERROR;
+    }
+
+    if (join_install_app(install_dir, app_arg, app_path, sizeof app_path) != 0) {
+        return (int)UPDATE_ERROR;
+    }
+
+    if (update_wait_for_parent_exit(parent_pid) != UPDATE_OK) {
+        return (int)UPDATE_ERROR;
+    }
+
+    (void)update_remove_tree(staging);
+
+    if (update_extract(zip_path, staging) != UPDATE_OK) {
+        (void)update_remove_tree(staging);
+        return (int)UPDATE_ERROR;
+    }
+
+    (void)update_remove_tree(backup);
+
+    if (update_copy_tree(install_dir, backup) != UPDATE_OK) {
+        (void)update_remove_tree(staging);
+        return (int)UPDATE_ERROR;
+    }
+
+    if (update_copy_tree(staging, install_dir) != UPDATE_OK) {
+        (void)update_copy_tree(backup, install_dir);
+        (void)update_remove_tree(staging);
+        return (int)UPDATE_ERROR;
+    }
+
+    (void)update_remove_tree(backup);
+    (void)update_remove_tree(staging);
+
+    if (update_relaunch_app(app_path) != UPDATE_OK) {
+        return (int)UPDATE_ERROR;
+    }
+
+    return (int)UPDATE_OK;
 }
