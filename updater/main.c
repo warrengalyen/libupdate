@@ -150,19 +150,21 @@ int main(int argc, char **argv)
 
     (void)update_remove_tree(backup);
 
-    if (update_copy_tree(install_dir, backup) != UPDATE_OK) {
+    /* Atomic-style swap: install → backup, staging → install (same volume). */
+    if (update_move_path(install_dir, backup) != UPDATE_OK) {
         (void)update_remove_tree(staging);
         return (int)UPDATE_ERROR;
     }
 
-    if (update_copy_tree(staging, install_dir) != UPDATE_OK) {
-        (void)update_copy_tree(backup, install_dir);
+    if (update_move_path(staging, install_dir) != UPDATE_OK) {
+        if (update_move_path(backup, install_dir) != UPDATE_OK) {
+            return (int)UPDATE_ERROR;
+        }
         (void)update_remove_tree(staging);
         return (int)UPDATE_ERROR;
     }
 
     (void)update_remove_tree(backup);
-    (void)update_remove_tree(staging);
 
     if (update_relaunch_app(app_path) != UPDATE_OK) {
         return (int)UPDATE_ERROR;

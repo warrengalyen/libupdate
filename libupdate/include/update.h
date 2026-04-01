@@ -86,6 +86,12 @@ UPDATE_API int update_copy_tree(const char *src_dir, const char *dst_dir);
 /** Recursively removes a file or directory tree with retries. */
 UPDATE_API int update_remove_tree(const char *path);
 
+/**
+ * Renames/moves src to dst with retries (same-directory renames are atomic on
+ * local filesystems: POSIX rename(2); Windows MoveFileEx).
+ */
+UPDATE_API int update_move_path(const char *src, const char *dst);
+
 /** Starts executable_path detached (argv is [path, NULL]). */
 UPDATE_API int update_relaunch_app(const char *executable_path);
 

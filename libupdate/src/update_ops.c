@@ -326,6 +326,26 @@ UPDATE_API int update_remove_tree(const char *path)
     return UPDATE_ERROR;
 }
 
+UPDATE_API int update_move_path(const char *src, const char *dst)
+{
+    unsigned a;
+    int pr;
+
+    if (src == NULL || src[0] == '\0' || dst == NULL || dst[0] == '\0') {
+        return UPDATE_ERROR;
+    }
+
+    for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
+        pr = platform_fs_move_path(src, dst);
+        if (pr == PLATFORM_OK) {
+            return UPDATE_OK;
+        }
+        sleep_ms(UPDATE_OPS_RETRY_MS);
+    }
+
+    return UPDATE_ERROR;
+}
+
 UPDATE_API int update_relaunch_app(const char *executable_path)
 {
     const char *const argv[2] = { executable_path, NULL };
