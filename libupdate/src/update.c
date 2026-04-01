@@ -188,7 +188,7 @@ static int sha256_digest_equals_ct(const unsigned char a[32], const unsigned cha
     return d == 0U ? 0 : 1;
 }
 
-int update_verify(const char *file, const char *expected_hash)
+UPDATE_API int update_verify(const char *file, const char *expected_hash)
 {
     unsigned char expect_bin[32];
     unsigned char digest[32];

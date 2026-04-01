@@ -69,6 +69,12 @@ UPDATE_API void update_set_download_progress_callback(update_download_progress_f
 UPDATE_API int update_verify(const char *file, const char *expected_hash);
 
 /**
+ * Extracts a ZIP archive to dest_dir. Refuses encrypted entries and any path
+ * that would escape dest_dir (zip slip).
+ */
+UPDATE_API int update_extract(const char *zip_path, const char *dest_dir);
+
+/**
  * All functions return int status codes (see update_status_t). Additional
  * values may be added in the future; treat unknown positive codes as UPDATE_ERROR.
  *

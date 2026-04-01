@@ -1,8 +1,13 @@
 add_library(update SHARED
     src/update.c
+    src/update_extract.c
     src/sha256.c
     src/platform_process.c
     src/platform_fs.c
+    third_party/miniz/miniz.c
+    third_party/miniz/miniz_tinfl.c
+    third_party/miniz/miniz_tdef.c
+    third_party/miniz/miniz_zip.c
 )
 
 if (WIN32 AND NOT CYGWIN)
@@ -27,7 +32,10 @@ target_include_directories(update
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/platform
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz
 )
+
+target_compile_definitions(update PRIVATE MINIZ_NO_ARCHIVE_WRITING_APIS)
 
 if (WIN32)
     target_compile_definitions(update PRIVATE UPDATE_EXPORTS)
