@@ -50,7 +50,11 @@ typedef enum {
     UPDATE_OK = 0,
     UPDATE_AVAILABLE = 1,
     UPDATE_NOT_AVAILABLE = 2,
-    UPDATE_ERROR = 3
+    UPDATE_ERROR = 3,
+    /** No newer update (e.g. update_perform after update_check). */
+    UPDATE_NOOP = 4,
+    /** Updater was spawned; exit the app so it can replace files (update_perform / update_apply). */
+    UPDATE_STARTED = 5
 } update_status_t;
 
 /**
@@ -124,6 +128,15 @@ UPDATE_API int update_download(const char *dest_path);
  * On success, flushes stdio and terminates the process with exit(0) (does not return).
  */
 UPDATE_API int update_apply(const char *package_path);
+
+/**
+ * Runs update_check; if a newer build exists, downloads the package into a unique
+ * folder under options.temp_dir or the system temp directory, verifies checksum
+ * from the manifest, then spawns the updater (same as update_apply) without
+ * exiting this process — return UPDATE_STARTED and then terminate the app so the
+ * updater can wait on --pid. Returns UPDATE_NOOP when already up to date,
+ * UPDATE_ERROR on failure.
+ */
 UPDATE_API int update_perform(void);
 
 #ifdef __cplusplus

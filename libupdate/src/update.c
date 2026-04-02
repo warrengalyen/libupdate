@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifndef UPDATE_APPLY_PATH_MAX
     #define UPDATE_APPLY_PATH_MAX 4096
@@ -30,6 +31,7 @@ static void ctx_unlock(void)
 }
 #else
     #include <pthread.h>
+    #include <unistd.h>
 static pthread_mutex_t s_ctx_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void ctx_lock(void)
@@ -412,7 +414,11 @@ int update_download(const char *dest_path)
     return UPDATE_OK;
 }
 
-UPDATE_API int update_apply(const char *package_path)
+/**
+ * Spawns updater with package_path. Returns 0 on success, -1 on failure.
+ * Frees internal copies before returning.
+ */
+static int update_apply_spawn(const char *package_path)
 {
     char exe_path[UPDATE_APPLY_PATH_MAX];
     char exe_dir[UPDATE_APPLY_PATH_MAX];
@@ -430,18 +436,18 @@ UPDATE_API int update_apply(const char *package_path)
 
     if (get_context() == NULL) {
         ctx_unlock();
-        return UPDATE_ERROR;
+        return -1;
     }
 
     if (package_path == NULL || package_path[0] == '\0') {
         ctx_unlock();
-        return UPDATE_ERROR;
+        return -1;
     }
 
     pkg_copy = dup_str(package_path);
     if (pkg_copy == NULL) {
         ctx_unlock();
-        return UPDATE_ERROR;
+        return -1;
     }
 
     if (s_ctx.install_dir != NULL && s_ctx.install_dir[0] != '\0') {
@@ -449,7 +455,7 @@ UPDATE_API int update_apply(const char *package_path)
         if (install_copy == NULL) {
             free(pkg_copy);
             ctx_unlock();
-            return UPDATE_ERROR;
+            return -1;
         }
     }
 
@@ -458,13 +464,13 @@ UPDATE_API int update_apply(const char *package_path)
     if (platform_fs_get_executable_path(exe_path, sizeof exe_path) != PLATFORM_OK) {
         free(pkg_copy);
         free(install_copy);
-        return UPDATE_ERROR;
+        return -1;
     }
 
     if (platform_fs_get_executable_dir(exe_dir, sizeof exe_dir) != PLATFORM_OK) {
         free(pkg_copy);
         free(install_copy);
-        return UPDATE_ERROR;
+        return -1;
     }
 
     if (install_copy != NULL) {
@@ -473,7 +479,7 @@ UPDATE_API int update_apply(const char *package_path)
         if (snprintf(install_buf, sizeof install_buf, "%s", exe_dir) >= (int)sizeof install_buf) {
             free(pkg_copy);
             free(install_copy);
-            return UPDATE_ERROR;
+            return -1;
         }
         install_target = install_buf;
     }
@@ -482,20 +488,20 @@ UPDATE_API int update_apply(const char *package_path)
     if (snprintf(updater_path, sizeof updater_path, "%s/updater.exe", exe_dir) >= (int)sizeof updater_path) {
         free(pkg_copy);
         free(install_copy);
-        return UPDATE_ERROR;
+        return -1;
     }
 #else
     if (snprintf(updater_path, sizeof updater_path, "%s/updater", exe_dir) >= (int)sizeof updater_path) {
         free(pkg_copy);
         free(install_copy);
-        return UPDATE_ERROR;
+        return -1;
     }
 #endif
 
     if (snprintf(pid_buf, sizeof pid_buf, "%d", platform_process_get_current_pid()) >= (int)sizeof pid_buf) {
         free(pkg_copy);
         free(install_copy);
-        return UPDATE_ERROR;
+        return -1;
     }
 
     spawn_argv[0] = updater_path;
@@ -514,29 +520,143 @@ UPDATE_API int update_apply(const char *package_path)
     free(install_copy);
 
     if (spawn_rc != PLATFORM_OK) {
-        return UPDATE_ERROR;
+        return -1;
     }
 
     (void)child_pid;
+    return 0;
+}
+
+UPDATE_API int update_apply(const char *package_path)
+{
+    if (update_apply_spawn(package_path) != 0) {
+        return UPDATE_ERROR;
+    }
+
     (void)fflush(NULL);
     exit(0);
 }
 
-int update_perform(void)
+UPDATE_API int update_perform(void)
 {
     update_info_t info;
-    int status;
+    int st;
+    char temp_base[UPDATE_APPLY_PATH_MAX];
+    char workdir[UPDATE_APPLY_PATH_MAX];
+    char zip_path[UPDATE_APPLY_PATH_MAX + 32];
+    char *temp_override = NULL;
+    char *dl_url = NULL;
+    char *checksum_copy = NULL;
+    update_http_progress_fn prog;
+    void *prog_ud;
+    unsigned attempt;
+    int http_rc;
 
-    status = update_check(&info);
-    if (status == UPDATE_ERROR) {
+    st = update_check(&info);
+    if (st == UPDATE_ERROR) {
         return UPDATE_ERROR;
     }
-    if (status == UPDATE_NOT_AVAILABLE) {
-        return UPDATE_OK;
+    if (st == UPDATE_NOT_AVAILABLE) {
+        return UPDATE_NOOP;
     }
-    if (status == UPDATE_AVAILABLE) {
+    if (st != UPDATE_AVAILABLE) {
         return UPDATE_ERROR;
     }
 
-    return UPDATE_ERROR;
+    ctx_lock();
+    if (get_context() == NULL) {
+        ctx_unlock();
+        return UPDATE_ERROR;
+    }
+    if (s_ctx.temp_dir != NULL && s_ctx.temp_dir[0] != '\0') {
+        temp_override = dup_str(s_ctx.temp_dir);
+        if (temp_override == NULL) {
+            ctx_unlock();
+            return UPDATE_ERROR;
+        }
+    }
+    prog = s_ctx.progress_cb;
+    prog_ud = s_ctx.progress_userdata;
+    ctx_unlock();
+
+    if (temp_override != NULL) {
+        if (snprintf(temp_base, sizeof temp_base, "%s", temp_override) >= (int)sizeof temp_base) {
+            free(temp_override);
+            return UPDATE_ERROR;
+        }
+        free(temp_override);
+        temp_override = NULL;
+    } else {
+        if (platform_fs_get_system_temp_dir(temp_base, sizeof temp_base) != PLATFORM_OK) {
+            return UPDATE_ERROR;
+        }
+    }
+
+    for (attempt = 0U; attempt < 8U; attempt++) {
+        unsigned long long tag;
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+        tag = (unsigned long long)(unsigned)GetTickCount();
+        tag ^= (unsigned long long)(unsigned)platform_process_get_current_pid() << 20;
+        tag += (unsigned long long)attempt;
+#else
+        tag = (unsigned long long)time(NULL);
+        tag ^= (unsigned long long)(unsigned)getpid() << 24;
+        tag += (unsigned long long)attempt;
+#endif
+
+        if (snprintf(workdir, sizeof workdir, "%s/libupdate_%llx", temp_base, (unsigned long long)tag)
+            >= (int)sizeof workdir) {
+            return UPDATE_ERROR;
+        }
+
+        if (platform_fs_create_directory_recursive(workdir) == PLATFORM_OK) {
+            break;
+        }
+    }
+
+    if (attempt >= 8U) {
+        return UPDATE_ERROR;
+    }
+
+    if (snprintf(zip_path, sizeof zip_path, "%s/package.bin", workdir) >= (int)sizeof zip_path) {
+        (void)update_remove_tree(workdir);
+        return UPDATE_ERROR;
+    }
+
+    dl_url = dup_str(info.download_url);
+    checksum_copy = dup_str(info.checksum);
+    if (dl_url == NULL || checksum_copy == NULL) {
+        free(dl_url);
+        free(checksum_copy);
+        (void)update_remove_tree(workdir);
+        return UPDATE_ERROR;
+    }
+
+    http_rc = update_http_stream_download(dl_url, zip_path, prog, prog_ud);
+    free(dl_url);
+    dl_url = NULL;
+
+    if (http_rc != 0) {
+        free(checksum_copy);
+        (void)update_remove_tree(workdir);
+        return UPDATE_ERROR;
+    }
+
+    if (update_verify(zip_path, checksum_copy) != UPDATE_OK) {
+        free(checksum_copy);
+        (void)platform_fs_remove_path(zip_path);
+        (void)update_remove_tree(workdir);
+        return UPDATE_ERROR;
+    }
+
+    free(checksum_copy);
+    checksum_copy = NULL;
+
+    if (update_apply_spawn(zip_path) != 0) {
+        (void)update_remove_tree(workdir);
+        return UPDATE_ERROR;
+    }
+
+    return UPDATE_STARTED;
 }

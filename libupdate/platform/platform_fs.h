@@ -12,6 +12,9 @@ extern "C" {
 int platform_fs_get_executable_path(char *out, size_t out_size);
 int platform_fs_get_executable_dir(char *out, size_t out_size);
 
+/** Writes system temp directory (no trailing separator). */
+int platform_fs_get_system_temp_dir(char *out, size_t out_size);
+
 int platform_fs_create_directory_recursive(const char *path);
 int platform_fs_move_path(const char *src, const char *dst);
 int platform_fs_remove_path(const char *path);

@@ -145,6 +145,29 @@ int platform_fs_get_executable_dir(char *out, size_t out_size)
     return strip_filename(out);
 }
 
+int platform_fs_get_system_temp_dir(char *out, size_t out_size)
+{
+    DWORD n;
+    size_t L;
+
+    if (out == NULL || out_size == 0U) {
+        return PLATFORM_ERR_INVALID_ARG;
+    }
+
+    n = GetTempPathA((DWORD)out_size, out);
+    if (n == 0U || n >= out_size) {
+        return PLATFORM_ERR_IO;
+    }
+
+    L = (size_t)n;
+    while (L > 1U && (out[L - 1U] == '\\' || out[L - 1U] == '/')) {
+        L--;
+        out[L] = '\0';
+    }
+
+    return PLATFORM_OK;
+}
+
 int platform_fs_create_directory_recursive(const char *path)
 {
     char stack[PATH_MAX];
@@ -437,6 +460,34 @@ int platform_fs_get_executable_dir(char *out, size_t out_size)
     }
 
     return strip_filename_posix(out);
+}
+
+int platform_fs_get_system_temp_dir(char *out, size_t out_size)
+{
+    const char *td;
+    size_t L;
+
+    if (out == NULL || out_size == 0U) {
+        return PLATFORM_ERR_INVALID_ARG;
+    }
+
+    td = getenv("TMPDIR");
+    if (td == NULL || td[0] == '\0') {
+        td = "/tmp";
+    }
+
+    L = strlen(td);
+    if (L + 1U > out_size) {
+        return PLATFORM_ERR_LIMIT;
+    }
+
+    memcpy(out, td, L + 1U);
+    while (L > 1U && out[L - 1U] == '/') {
+        L--;
+        out[L] = '\0';
+    }
+
+    return PLATFORM_OK;
 }
 
 static int mkdir_one_posix(const char *path)
