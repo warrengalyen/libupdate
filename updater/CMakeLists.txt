@@ -1,4 +1,6 @@
-add_executable(updater main.c)
+add_executable(updater main.c update_state.c)
+
+target_include_directories(updater PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(updater PRIVATE update)
 

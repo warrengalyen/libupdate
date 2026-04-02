@@ -4,7 +4,9 @@
 
 #include <update.h>
 
-#define PATH_CAP 4096
+#include "update_state.h"
+
+#define PATH_CAP UPDATER_PATH_CAP
 
 static void usage(FILE *out, const char *prog)
 {
@@ -115,8 +117,13 @@ int main(int argc, char **argv)
     int parent_pid;
     char staging[PATH_CAP];
     char backup[PATH_CAP];
+    char state_path[PATH_CAP];
     char app_path[PATH_CAP];
+    updater_state_t st;
+    int state_found = 0;
+    int resume = UPDATER_RESUME_FULL;
     int n;
+    int ld;
 
     if (parse_args(argc, argv, &zip_path, &install_dir, &parent_pid, &app_arg) != 0) {
         usage(stderr, argv[0] != NULL ? argv[0] : "updater");
@@ -133,26 +140,101 @@ int main(int argc, char **argv)
         return (int)UPDATE_ERROR;
     }
 
-    if (join_install_app(install_dir, app_arg, app_path, sizeof app_path) != 0) {
+    if (updater_state_build_path(state_path, sizeof state_path, install_dir) != 0) {
         return (int)UPDATE_ERROR;
+    }
+
+    ld = updater_state_load(state_path, &st, &state_found);
+    if (ld != 0) {
+        updater_state_remove(state_path);
+        state_found = 0;
+    } else if (state_found != 0) {
+        if (updater_state_validate(&st, install_dir, staging, backup, zip_path) != 0) {
+            updater_state_remove(state_path);
+            state_found = 0;
+        } else if (updater_determine_resume(install_dir, staging, backup, &st, state_found, &resume) != 0) {
+            return (int)UPDATE_ERROR;
+        }
     }
 
     if (update_wait_for_parent_exit(parent_pid) != UPDATE_OK) {
         return (int)UPDATE_ERROR;
     }
 
-    (void)update_remove_tree(staging);
+    if (join_install_app(install_dir, app_arg, app_path, sizeof app_path) != 0) {
+        return (int)UPDATE_ERROR;
+    }
 
-    if (update_extract(zip_path, staging) != UPDATE_OK) {
+    if (resume == UPDATER_RESUME_ROLLBACK) {
+        if (update_move_path(backup, install_dir) != UPDATE_OK) {
+            return (int)UPDATE_ERROR;
+        }
         (void)update_remove_tree(staging);
+        updater_state_remove(state_path);
+        if (update_relaunch_app(app_path) != UPDATE_OK) {
+            return (int)UPDATE_ERROR;
+        }
+        return (int)UPDATE_OK;
+    }
+
+    if (resume == UPDATER_RESUME_POST_INSTALL) {
+        (void)update_remove_tree(backup);
+        updater_state_remove(state_path);
+        if (update_relaunch_app(app_path) != UPDATE_OK) {
+            return (int)UPDATE_ERROR;
+        }
+        return (int)UPDATE_OK;
+    }
+
+    if (resume == UPDATER_RESUME_POST_BACKUP) {
+        if (update_move_path(staging, install_dir) != UPDATE_OK) {
+            if (update_move_path(backup, install_dir) != UPDATE_OK) {
+                return (int)UPDATE_ERROR;
+            }
+            (void)update_remove_tree(staging);
+            updater_state_remove(state_path);
+            return (int)UPDATE_ERROR;
+        }
+        (void)updater_state_save_atomic(state_path, "installed", install_dir, staging, backup, zip_path);
+        (void)update_remove_tree(backup);
+        updater_state_remove(state_path);
+        if (update_relaunch_app(app_path) != UPDATE_OK) {
+            return (int)UPDATE_ERROR;
+        }
+        return (int)UPDATE_OK;
+    }
+
+    /* UPDATER_RESUME_FULL or UPDATER_RESUME_POST_EXTRACT */
+    if (resume == UPDATER_RESUME_FULL) {
+        (void)update_remove_tree(staging);
+        if (update_extract(zip_path, staging) != UPDATE_OK) {
+            (void)update_remove_tree(staging);
+            updater_state_remove(state_path);
+            return (int)UPDATE_ERROR;
+        }
+    }
+
+    if (updater_state_save_atomic(state_path, "extracted", install_dir, staging, backup, zip_path) != UPDATE_OK) {
+        (void)update_remove_tree(staging);
+        updater_state_remove(state_path);
         return (int)UPDATE_ERROR;
     }
 
     (void)update_remove_tree(backup);
 
-    /* Atomic-style swap: install → backup, staging → install (same volume). */
     if (update_move_path(install_dir, backup) != UPDATE_OK) {
         (void)update_remove_tree(staging);
+        updater_state_remove(state_path);
+        return (int)UPDATE_ERROR;
+    }
+
+    if (updater_state_save_atomic(state_path, "install_backed_up", install_dir, staging, backup, zip_path)
+        != UPDATE_OK) {
+        if (update_move_path(backup, install_dir) != UPDATE_OK) {
+            return (int)UPDATE_ERROR;
+        }
+        (void)update_remove_tree(staging);
+        updater_state_remove(state_path);
         return (int)UPDATE_ERROR;
     }
 
@@ -161,10 +243,14 @@ int main(int argc, char **argv)
             return (int)UPDATE_ERROR;
         }
         (void)update_remove_tree(staging);
+        updater_state_remove(state_path);
         return (int)UPDATE_ERROR;
     }
 
+    (void)updater_state_save_atomic(state_path, "installed", install_dir, staging, backup, zip_path);
+
     (void)update_remove_tree(backup);
+    updater_state_remove(state_path);
 
     if (update_relaunch_app(app_path) != UPDATE_OK) {
         return (int)UPDATE_ERROR;
