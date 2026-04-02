@@ -19,6 +19,8 @@
 #endif
 
 #define UPDATE_OPS_RETRIES 8
+#define UPDATE_OPS_MOVE_RETRIES 20
+#define UPDATE_OPS_REMOVE_RETRIES 16
 #define UPDATE_OPS_RETRY_MS 50U
 
 #ifndef UPDATE_OPS_PATH_MAX
@@ -315,7 +317,7 @@ UPDATE_API int update_remove_tree(const char *path)
         return UPDATE_ERROR;
     }
 
-    for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
+    for (a = 0U; a < UPDATE_OPS_REMOVE_RETRIES; a++) {
         pr = platform_fs_remove_path(path);
         if (pr == PLATFORM_OK) {
             return UPDATE_OK;
@@ -335,7 +337,7 @@ UPDATE_API int update_move_path(const char *src, const char *dst)
         return UPDATE_ERROR;
     }
 
-    for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
+    for (a = 0U; a < UPDATE_OPS_MOVE_RETRIES; a++) {
         pr = platform_fs_move_path(src, dst);
         if (pr == PLATFORM_OK) {
             return UPDATE_OK;
@@ -352,6 +354,10 @@ UPDATE_API int update_relaunch_app(const char *executable_path)
     int pid = 0;
 
     if (executable_path == NULL || executable_path[0] == '\0') {
+        return UPDATE_ERROR;
+    }
+
+    if (update_validate_path(executable_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
         return UPDATE_ERROR;
     }
 

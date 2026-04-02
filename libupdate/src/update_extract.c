@@ -10,6 +10,8 @@
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
     #include <windows.h>
+#else
+    #include <sys/stat.h>
 #endif
 
 #ifndef UPDATE_EXTRACT_PATH_MAX
@@ -206,6 +208,10 @@ UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
         return UPDATE_ERROR;
     }
 
+    if (update_validate_path(zip_path, 0U) != UPDATE_OK || update_validate_path(dest_dir, 0U) != UPDATE_OK) {
+        return UPDATE_ERROR;
+    }
+
     if (platform_fs_create_directory_recursive(dest_dir) != PLATFORM_OK) {
         return UPDATE_ERROR;
     }
@@ -252,6 +258,15 @@ UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
             if (platform_fs_create_directory_recursive(full_path) != PLATFORM_OK) {
                 goto cleanup_zip;
             }
+#if !defined(_WIN32) || defined(__CYGWIN__)
+            {
+                mz_uint32 ext = st.m_external_attr;
+                unsigned mode = (unsigned)((ext >> 16) & 07777U);
+                if (mode != 0U) {
+                    (void)platform_fs_chmod(full_path, mode);
+                }
+            }
+#endif
             continue;
         }
 
@@ -269,6 +284,16 @@ UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
             (void)platform_fs_remove_path(tmp_path);
             goto cleanup_zip;
         }
+
+#if !defined(_WIN32) || defined(__CYGWIN__)
+        {
+            mz_uint32 ext = st.m_external_attr;
+            unsigned mode = (unsigned)((ext >> 16) & 07777U);
+            if (mode != 0U) {
+                (void)platform_fs_chmod(tmp_path, mode);
+            }
+        }
+#endif
 
         if (platform_fs_move_path(tmp_path, full_path) != PLATFORM_OK) {
             (void)platform_fs_remove_path(tmp_path);

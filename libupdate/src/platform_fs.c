@@ -341,6 +341,13 @@ static int remove_dir_recursive_win(const char *dir)
     return PLATFORM_OK;
 }
 
+int platform_fs_chmod(const char *path, unsigned mode)
+{
+    (void)path;
+    (void)mode;
+    return PLATFORM_OK;
+}
+
 int platform_fs_remove_path(const char *path)
 {
     DWORD a;
@@ -659,6 +666,22 @@ int platform_fs_remove_path(const char *path)
     if (unlink(path) != 0) {
         return map_errno_to_platform();
     }
+    return PLATFORM_OK;
+}
+
+int platform_fs_chmod(const char *path, unsigned mode)
+{
+    mode_t m;
+
+    if (path == NULL || path[0] == '\0') {
+        return PLATFORM_ERR_INVALID_ARG;
+    }
+
+    m = (mode_t)(mode & 07777U);
+    if (chmod(path, m) != 0) {
+        return map_errno_to_platform();
+    }
+
     return PLATFORM_OK;
 }
 

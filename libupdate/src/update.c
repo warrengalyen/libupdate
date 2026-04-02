@@ -55,6 +55,8 @@ typedef struct {
     char *expected_sha256;
     update_http_progress_fn progress_cb;
     void *progress_userdata;
+    update_verify_signature_fn signature_cb;
+    void *signature_userdata;
 } update_context_t;
 
 static update_context_t s_ctx;
@@ -96,6 +98,8 @@ static void context_free_strings(update_context_t *ctx)
     ctx->temp_dir = NULL;
     ctx->channel = NULL;
     ctx->expected_sha256 = NULL;
+    ctx->signature_cb = NULL;
+    ctx->signature_userdata = NULL;
     ctx->initialized = 0;
 }
 
@@ -304,6 +308,20 @@ int update_init(const update_options_t *opts)
         }
     }
 
+    if (s_ctx.install_dir != NULL && s_ctx.install_dir[0] != '\0'
+        && update_validate_path(s_ctx.install_dir, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
+        context_free_strings(&s_ctx);
+        ctx_unlock();
+        return UPDATE_ERROR;
+    }
+
+    if (s_ctx.temp_dir != NULL && s_ctx.temp_dir[0] != '\0'
+        && update_validate_path(s_ctx.temp_dir, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
+        context_free_strings(&s_ctx);
+        ctx_unlock();
+        return UPDATE_ERROR;
+    }
+
     s_ctx.initialized = 1;
 
     ctx_unlock();
@@ -319,6 +337,18 @@ void update_set_download_progress_callback(update_download_progress_fn cb, void 
     }
     s_ctx.progress_cb = (update_http_progress_fn)cb;
     s_ctx.progress_userdata = user;
+    ctx_unlock();
+}
+
+UPDATE_API void update_set_package_signature_verifier(update_verify_signature_fn fn, void *user)
+{
+    ctx_lock();
+    if (!is_initialized()) {
+        ctx_unlock();
+        return;
+    }
+    s_ctx.signature_cb = fn;
+    s_ctx.signature_userdata = user;
     ctx_unlock();
 }
 
@@ -373,6 +403,11 @@ int update_download(const char *dest_path)
     }
 
     if (dest_path == NULL || dest_path[0] == '\0') {
+        ctx_unlock();
+        return UPDATE_ERROR;
+    }
+
+    if (update_validate_path(dest_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
         ctx_unlock();
         return UPDATE_ERROR;
     }
@@ -444,6 +479,11 @@ static int update_apply_spawn(const char *package_path)
         return -1;
     }
 
+    if (update_validate_path(package_path, 0U) != UPDATE_OK) {
+        ctx_unlock();
+        return -1;
+    }
+
     pkg_copy = dup_str(package_path);
     if (pkg_copy == NULL) {
         ctx_unlock();
@@ -497,6 +537,14 @@ static int update_apply_spawn(const char *package_path)
         return -1;
     }
 #endif
+
+    if (update_validate_path(install_target, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(exe_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(updater_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
+        free(pkg_copy);
+        free(install_copy);
+        return -1;
+    }
 
     if (snprintf(pid_buf, sizeof pid_buf, "%d", platform_process_get_current_pid()) >= (int)sizeof pid_buf) {
         free(pkg_copy);
@@ -624,6 +672,13 @@ UPDATE_API int update_perform(void)
         return UPDATE_ERROR;
     }
 
+    if (update_validate_path(temp_base, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(workdir, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(zip_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
+        (void)update_remove_tree(workdir);
+        return UPDATE_ERROR;
+    }
+
     dl_url = dup_str(info.download_url);
     checksum_copy = dup_str(info.checksum);
     if (dl_url == NULL || checksum_copy == NULL) {
@@ -652,6 +707,22 @@ UPDATE_API int update_perform(void)
 
     free(checksum_copy);
     checksum_copy = NULL;
+
+    {
+        update_verify_signature_fn sig;
+        void *sig_ud;
+
+        ctx_lock();
+        sig = s_ctx.signature_cb;
+        sig_ud = s_ctx.signature_userdata;
+        ctx_unlock();
+
+        if (sig != NULL && sig(zip_path, sig_ud) != UPDATE_OK) {
+            (void)platform_fs_remove_path(zip_path);
+            (void)update_remove_tree(workdir);
+            return UPDATE_ERROR;
+        }
+    }
 
     if (update_apply_spawn(zip_path) != 0) {
         (void)update_remove_tree(workdir);

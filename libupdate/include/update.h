@@ -72,6 +72,32 @@ UPDATE_API void update_set_download_progress_callback(update_download_progress_f
  */
 UPDATE_API int update_verify(const char *file, const char *expected_hash);
 
+/** Pass to update_validate_path to require an absolute path (drive or UNC on Windows, leading / on POSIX). */
+#define UPDATE_PATH_REQUIRE_ABSOLUTE 1u
+
+/**
+ * Rejects control characters, reserved Windows device names, ".." path segments,
+ * and over-long paths. Use UPDATE_PATH_REQUIRE_ABSOLUTE for install roots.
+ */
+UPDATE_API int update_validate_path(const char *path, unsigned flags);
+
+/**
+ * Ensures staging/backup/state match the canonical names derived from install_dir
+ * and that all paths pass update_validate_path (install and aux paths absolute).
+ */
+UPDATE_API int update_validate_install_paths(const char *zip_path,
+    const char *install_dir,
+    const char *staging_dir,
+    const char *backup_dir,
+    const char *state_path);
+
+/**
+ * Optional package signature hook (not used unless set). Return UPDATE_OK to allow
+ * install, otherwise UPDATE_ERROR to abort update_perform before spawning the updater.
+ */
+typedef int (*update_verify_signature_fn)(const char *package_path, void *user);
+UPDATE_API void update_set_package_signature_verifier(update_verify_signature_fn fn, void *user);
+
 /**
  * Extracts a ZIP archive to dest_dir. Refuses encrypted entries and any path
  * that would escape dest_dir (zip slip).

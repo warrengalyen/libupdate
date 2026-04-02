@@ -246,6 +246,13 @@ int updater_state_validate(const updater_state_t *st,
         return -1;
     }
 
+    if (update_validate_path(st->target, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(st->staging, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(st->backup, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(st->package, 0U) != UPDATE_OK) {
+        return -1;
+    }
+
     return 0;
 }
 

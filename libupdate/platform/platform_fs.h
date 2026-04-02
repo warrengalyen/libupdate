@@ -19,6 +19,9 @@ int platform_fs_create_directory_recursive(const char *path);
 int platform_fs_move_path(const char *src, const char *dst);
 int platform_fs_remove_path(const char *path);
 
+/** POSIX: chmod path to (mode & 07777). Windows: no-op success. */
+int platform_fs_chmod(const char *path, unsigned mode);
+
 #ifdef __cplusplus
 }
 #endif

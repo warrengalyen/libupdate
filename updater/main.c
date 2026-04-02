@@ -144,6 +144,10 @@ int main(int argc, char **argv)
         return (int)UPDATE_ERROR;
     }
 
+    if (update_validate_install_paths(zip_path, install_dir, staging, backup, state_path) != UPDATE_OK) {
+        return (int)UPDATE_ERROR;
+    }
+
     ld = updater_state_load(state_path, &st, &state_found);
     if (ld != 0) {
         updater_state_remove(state_path);
