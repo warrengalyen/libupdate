@@ -103,6 +103,15 @@ UPDATE_API int update_relaunch_app(const char *executable_path);
  * Call update_init before other entry points.
  */
 UPDATE_API int update_init(const update_options_t *opts);
+
+/**
+ * GETs update_url and expects a small JSON object with string fields:
+ *   "version", "download_url", "checksum"
+ * Compares "version" to the built-in baseline (override when compiling this
+ * library with -DUPDATE_APP_VERSION_STRING=\"1.0.0\"). Returns UPDATE_AVAILABLE
+ * when the remote version is strictly newer, UPDATE_NOT_AVAILABLE otherwise,
+ * or UPDATE_ERROR on transport/parse failures.
+ */
 UPDATE_API int update_check(update_info_t *out);
 UPDATE_API int update_download(const char *dest_path);
 
@@ -121,4 +130,4 @@ UPDATE_API int update_perform(void);
 }
 #endif
 
-#endif /* UPDATE_H */
+#endif  /* UPDATE_H */

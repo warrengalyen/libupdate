@@ -20,4 +20,15 @@ int update_http_stream_download(const char *url,
     update_http_progress_fn on_progress,
     void *progress_user);
 
+/**
+ * GET url into a growable buffer (NUL-terminated). On success *out_body is malloc'd
+ * and must be freed by the caller; *out_len is the body length (excluding the trailing NUL).
+ * Responses larger than 512 KiB fail. Returns 0 on success, non-zero on failure.
+ */
+int update_http_fetch(const char *url,
+    char **out_body,
+    size_t *out_len,
+    update_http_progress_fn on_progress,
+    void *progress_user);
+
 #endif /* HTTP_TRANSPORT_H */

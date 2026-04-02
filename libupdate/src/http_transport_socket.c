@@ -594,3 +594,266 @@ cleanup:
     free(tmp_path);
     return rc;
 }
+
+#define UPDATE_HTTP_FETCH_MAX (512U * 1024U)
+
+static int mem_append(char **buf, size_t *len, size_t *cap, const void *chunk, size_t chunk_len)
+{
+    if (append_grow(buf, len, cap, chunk, chunk_len) != 0) {
+        return -1;
+    }
+    if (*len > UPDATE_HTTP_FETCH_MAX) {
+        return -1;
+    }
+    return 0;
+}
+
+static int read_body_known_src_mem(io_src *s,
+    char **buf,
+    size_t *len,
+    size_t *cap,
+    unsigned long long nbytes,
+    update_http_progress_fn on_progress,
+    void *progress_user,
+    unsigned long long total_hint)
+{
+    unsigned char tmp[8192];
+    unsigned long long done = 0ULL;
+
+    while (done < nbytes) {
+        unsigned long long want = nbytes - done;
+        size_t chunk = want > sizeof(tmp) ? sizeof(tmp) : (size_t)want;
+        int rd = src_read(s, tmp, chunk);
+        if (rd <= 0) {
+            return -1;
+        }
+        if (mem_append(buf, len, cap, tmp, (size_t)rd) != 0) {
+            return -1;
+        }
+        done += (unsigned long long)(size_t)rd;
+        if (on_progress != NULL) {
+            on_progress(done, total_hint, progress_user);
+        }
+    }
+
+    return 0;
+}
+
+static int read_body_chunked_src_mem(io_src *s,
+    char **buf,
+    size_t *len,
+    size_t *cap,
+    update_http_progress_fn on_progress,
+    void *progress_user)
+{
+    unsigned char tmp[8192];
+    unsigned long long done = 0ULL;
+
+    for (;;) {
+        char line[96];
+        unsigned long long chunk_sz;
+        unsigned long long i;
+
+        if (read_line_src(s, line, sizeof(line)) != 0) {
+            return -1;
+        }
+        chunk_sz = strtoull(line, NULL, 16);
+        if (chunk_sz == 0ULL) {
+            if (read_line_src(s, line, sizeof(line)) != 0) {
+                return -1;
+            }
+            break;
+        }
+
+        for (i = 0ULL; i < chunk_sz;) {
+            size_t want = (size_t)(chunk_sz - i);
+            if (want > sizeof(tmp)) {
+                want = sizeof(tmp);
+            }
+            int rd = src_read(s, tmp, want);
+            if (rd <= 0) {
+                return -1;
+            }
+            if (mem_append(buf, len, cap, tmp, (size_t)rd) != 0) {
+                return -1;
+            }
+            i += (unsigned long long)(size_t)rd;
+            done += (unsigned long long)(size_t)rd;
+            if (on_progress != NULL) {
+                on_progress(done, 0ULL, progress_user);
+            }
+        }
+
+        if (read_line_src(s, line, sizeof(line)) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int read_body_until_close_src_mem(io_src *s,
+    char **buf,
+    size_t *len,
+    size_t *cap,
+    update_http_progress_fn on_progress,
+    void *progress_user,
+    unsigned long long total_hint)
+{
+    unsigned char tmp[8192];
+    unsigned long long done = 0ULL;
+
+    for (;;) {
+        int rd = src_read(s, tmp, sizeof(tmp));
+        if (rd < 0) {
+            return -1;
+        }
+        if (rd == 0) {
+            break;
+        }
+        if (mem_append(buf, len, cap, tmp, (size_t)rd) != 0) {
+            return -1;
+        }
+        done += (unsigned long long)(size_t)rd;
+        if (on_progress != NULL) {
+            on_progress(done, total_hint, progress_user);
+        }
+    }
+
+    return 0;
+}
+
+int update_http_fetch(const char *url,
+    char **out_body,
+    size_t *out_len,
+    update_http_progress_fn on_progress,
+    void *progress_user)
+{
+    char host[512];
+    char path[4096];
+    unsigned port = 80U;
+    char portbuf[16];
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    int sockfd = -1;
+    char req[8192];
+    int req_len;
+    char *headers = NULL;
+    size_t header_total = 0U;
+    const char *body_sep;
+    size_t body_prefix;
+    int cl_found = 0;
+    unsigned long long content_len = 0ULL;
+    int chunked = 0;
+    io_src src;
+    char *body = NULL;
+    size_t blen = 0U;
+    size_t bcap = 0U;
+    int rc = -1;
+
+    if (url == NULL || out_body == NULL || out_len == NULL) {
+        return -1;
+    }
+
+    *out_body = NULL;
+    *out_len = 0U;
+
+    if (parse_http_url(url, host, sizeof(host), path, sizeof(path), &port) != 0) {
+        return -1;
+    }
+
+    (void)snprintf(portbuf, sizeof(portbuf), "%u", port);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    if (getaddrinfo(host, portbuf, &hints, &res) != 0) {
+        return -1;
+    }
+
+    sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (sockfd < 0) {
+        goto cleanup;
+    }
+
+    if (connect(sockfd, res->ai_addr, res->ai_addrlen) != 0) {
+        goto cleanup;
+    }
+
+    req_len = snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Connection: close\r\n"
+        "User-Agent: libupdate/1.0\r\n"
+        "Accept: application/json\r\n"
+        "\r\n",
+        path,
+        host);
+    if (req_len <= 0 || (size_t)req_len >= sizeof(req)) {
+        goto cleanup;
+    }
+
+    {
+        ssize_t wr = send(sockfd, req, (size_t)req_len, 0);
+        if (wr != (ssize_t)req_len) {
+            goto cleanup;
+        }
+    }
+
+    if (read_http_headers(sockfd, &headers, &header_total) != 0) {
+        goto cleanup;
+    }
+
+    if (parse_status_200(headers) != 0) {
+        goto cleanup;
+    }
+
+    chunked = is_chunked_encoding(headers);
+    (void)parse_content_length(headers, &content_len, &cl_found);
+
+    body_sep = strstr(headers, "\r\n\r\n");
+    if (body_sep == NULL) {
+        goto cleanup;
+    }
+    body_sep += 4U;
+    body_prefix = header_total - (size_t)(body_sep - headers);
+
+    memset(&src, 0, sizeof(src));
+    src.pfx = (const unsigned char *)body_sep;
+    src.pfx_len = body_prefix;
+    src.pfx_pos = 0U;
+    src.fd = sockfd;
+
+    if (chunked != 0) {
+        if (read_body_chunked_src_mem(&src, &body, &blen, &bcap, on_progress, progress_user) != 0) {
+            goto cleanup;
+        }
+    } else if (cl_found != 0) {
+        if (read_body_known_src_mem(&src, &body, &blen, &bcap, content_len, on_progress, progress_user, content_len)
+            != 0) {
+            goto cleanup;
+        }
+    } else {
+        if (read_body_until_close_src_mem(&src, &body, &blen, &bcap, on_progress, progress_user, 0ULL) != 0) {
+            goto cleanup;
+        }
+    }
+
+    *out_body = body;
+    *out_len = blen;
+    body = NULL;
+    rc = 0;
+
+cleanup:
+    free(body);
+    if (sockfd >= 0) {
+        (void)close(sockfd);
+    }
+    if (res != NULL) {
+        freeaddrinfo(res);
+    }
+    free(headers);
+    return rc;
+}

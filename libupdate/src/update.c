@@ -4,6 +4,7 @@
 #include "platform_fs.h"
 #include "platform_process.h"
 #include "sha256.h"
+#include "update_remote_check.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -321,7 +322,10 @@ void update_set_download_progress_callback(update_download_progress_fn cb, void 
 
 int update_check(update_info_t *out)
 {
-    int result;
+    char *url_copy = NULL;
+    update_http_progress_fn prog;
+    void *prog_ud;
+    int rc;
 
     ctx_lock();
 
@@ -336,10 +340,19 @@ int update_check(update_info_t *out)
     }
 
     memset(out, 0, sizeof(*out));
-    result = UPDATE_NOT_AVAILABLE;
+    url_copy = dup_str(s_ctx.update_url);
+    prog = s_ctx.progress_cb;
+    prog_ud = s_ctx.progress_userdata;
 
     ctx_unlock();
-    return result;
+
+    if (url_copy == NULL) {
+        return UPDATE_ERROR;
+    }
+
+    rc = update_remote_check(url_copy, prog, prog_ud, out);
+    free(url_copy);
+    return rc;
 }
 
 int update_download(const char *dest_path)
