@@ -16,20 +16,154 @@
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
 
+/* Command line rules aligned with MSVC / CommandLineToArgvW (see Python list2cmdline). */
+static int win_arg_needs_quotes(const char *arg)
+{
+    const char *p;
+
+    if (arg == NULL || arg[0] == '\0') {
+        return 1;
+    }
+
+    for (p = arg; *p != '\0'; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\v' || *p == '"') {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static size_t win_one_arg_cmdline_len(const char *arg)
+{
+    size_t n;
+    size_t slashes;
+    const char *p;
+
+    if (win_arg_needs_quotes(arg) == 0) {
+        return strlen(arg);
+    }
+
+    n = 2U; /* wrapping " " */
+    slashes = 0U;
+    for (p = arg; *p != '\0'; p++) {
+        if (*p == '\\') {
+            slashes++;
+        } else if (*p == '"') {
+            n += slashes * 2U + 1U;
+            slashes = 0U;
+            n++;
+        } else {
+            n += slashes;
+            slashes = 0U;
+            n++;
+        }
+    }
+
+    n += slashes * 2U;
+    return n;
+}
+
+static int win_append_one_arg(char *buf, size_t cap, size_t *pos, const char *arg)
+{
+    size_t slashes;
+    const char *p;
+
+    if (win_arg_needs_quotes(arg) == 0) {
+        for (p = arg; *p != '\0'; p++) {
+            if (*pos + 1U >= cap) {
+                return PLATFORM_ERR_LIMIT;
+            }
+            buf[*pos] = *p;
+            (*pos)++;
+        }
+        return PLATFORM_OK;
+    }
+
+    if (*pos + 1U >= cap) {
+        return PLATFORM_ERR_LIMIT;
+    }
+    buf[*pos] = '"';
+    (*pos)++;
+
+    slashes = 0U;
+    for (p = arg; *p != '\0'; p++) {
+        if (*p == '\\') {
+            slashes++;
+        } else if (*p == '"') {
+            size_t k;
+            for (k = 0U; k < slashes * 2U + 1U; k++) {
+                if (*pos + 1U >= cap) {
+                    return PLATFORM_ERR_LIMIT;
+                }
+                buf[*pos] = '\\';
+                (*pos)++;
+            }
+            slashes = 0U;
+            if (*pos + 1U >= cap) {
+                return PLATFORM_ERR_LIMIT;
+            }
+            buf[*pos] = '"';
+            (*pos)++;
+        } else {
+            size_t k;
+            for (k = 0U; k < slashes; k++) {
+                if (*pos + 1U >= cap) {
+                    return PLATFORM_ERR_LIMIT;
+                }
+                buf[*pos] = '\\';
+                (*pos)++;
+            }
+            slashes = 0U;
+            if (*pos + 1U >= cap) {
+                return PLATFORM_ERR_LIMIT;
+            }
+            buf[*pos] = *p;
+            (*pos)++;
+        }
+    }
+
+    {
+        size_t k;
+        for (k = 0U; k < slashes * 2U; k++) {
+            if (*pos + 1U >= cap) {
+                return PLATFORM_ERR_LIMIT;
+            }
+            buf[*pos] = '\\';
+            (*pos)++;
+        }
+    }
+
+    if (*pos + 1U >= cap) {
+        return PLATFORM_ERR_LIMIT;
+    }
+    buf[*pos] = '"';
+    (*pos)++;
+
+    return PLATFORM_OK;
+}
+
 static int win_build_cmdline(const char *const *argv, char **out_cmdline)
 {
     size_t total;
     size_t pos;
     size_t j;
     char *buf;
+    int rc;
 
     if (argv == NULL || argv[0] == NULL) {
         return PLATFORM_ERR_INVALID_ARG;
     }
 
     total = 1U;
-    for (j = 0; argv[j] != NULL; j++) {
-        total += strlen(argv[j]) * 2U + 3U;
+    for (j = 0U; argv[j] != NULL; j++) {
+        if (j > 0U) {
+            total++;
+        }
+        total += win_one_arg_cmdline_len(argv[j]);
+        if (total > 1000000U) {
+            return PLATFORM_ERR_LIMIT;
+        }
     }
 
     buf = (char *)malloc(total);
@@ -38,39 +172,22 @@ static int win_build_cmdline(const char *const *argv, char **out_cmdline)
     }
 
     pos = 0U;
-    for (j = 0; argv[j] != NULL; j++) {
-        const char *a = argv[j];
-        int need_quote = (strchr(a, ' ') != NULL) || (strchr(a, '\t') != NULL) || (a[0] == '\0');
-
-        if (pos > 0U) {
+    for (j = 0U; argv[j] != NULL; j++) {
+        if (j > 0U) {
+            if (pos + 1U >= total) {
+                free(buf);
+                return PLATFORM_ERR_LIMIT;
+            }
             buf[pos++] = ' ';
         }
-
-        if (need_quote) {
-            buf[pos++] = '"';
-            for (; *a != '\0'; a++) {
-                if (*a == '"') {
-                    if (pos + 2U >= total) {
-                        free(buf);
-                        return PLATFORM_ERR_LIMIT;
-                    }
-                    buf[pos++] = '\\';
-                }
-                buf[pos++] = *a;
-            }
-            buf[pos++] = '"';
-        } else {
-            for (; *a != '\0'; a++) {
-                if (pos + 1U >= total) {
-                    free(buf);
-                    return PLATFORM_ERR_LIMIT;
-                }
-                buf[pos++] = *a;
-            }
+        rc = win_append_one_arg(buf, total, &pos, argv[j]);
+        if (rc != PLATFORM_OK) {
+            free(buf);
+            return rc;
         }
     }
 
-    if (pos >= total) {
+    if (pos + 1U > total) {
         free(buf);
         return PLATFORM_ERR_LIMIT;
     }

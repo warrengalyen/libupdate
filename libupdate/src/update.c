@@ -2,12 +2,17 @@
 
 #include "http_transport.h"
 #include "platform_fs.h"
+#include "platform_process.h"
 #include "sha256.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef UPDATE_APPLY_PATH_MAX
+    #define UPDATE_APPLY_PATH_MAX 4096
+#endif
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
     #include <windows.h>
@@ -394,8 +399,20 @@ int update_download(const char *dest_path)
     return UPDATE_OK;
 }
 
-int update_apply(const char *package_path)
+UPDATE_API int update_apply(const char *package_path)
 {
+    char exe_path[UPDATE_APPLY_PATH_MAX];
+    char exe_dir[UPDATE_APPLY_PATH_MAX];
+    char updater_path[UPDATE_APPLY_PATH_MAX];
+    char install_buf[UPDATE_APPLY_PATH_MAX];
+    char pid_buf[32];
+    char *pkg_copy = NULL;
+    char *install_copy = NULL;
+    const char *install_target;
+    const char *spawn_argv[10];
+    int spawn_rc;
+    int child_pid = 0;
+
     ctx_lock();
 
     if (get_context() == NULL) {
@@ -408,8 +425,88 @@ int update_apply(const char *package_path)
         return UPDATE_ERROR;
     }
 
+    pkg_copy = dup_str(package_path);
+    if (pkg_copy == NULL) {
+        ctx_unlock();
+        return UPDATE_ERROR;
+    }
+
+    if (s_ctx.install_dir != NULL && s_ctx.install_dir[0] != '\0') {
+        install_copy = dup_str(s_ctx.install_dir);
+        if (install_copy == NULL) {
+            free(pkg_copy);
+            ctx_unlock();
+            return UPDATE_ERROR;
+        }
+    }
+
     ctx_unlock();
-    return UPDATE_ERROR;
+
+    if (platform_fs_get_executable_path(exe_path, sizeof exe_path) != PLATFORM_OK) {
+        free(pkg_copy);
+        free(install_copy);
+        return UPDATE_ERROR;
+    }
+
+    if (platform_fs_get_executable_dir(exe_dir, sizeof exe_dir) != PLATFORM_OK) {
+        free(pkg_copy);
+        free(install_copy);
+        return UPDATE_ERROR;
+    }
+
+    if (install_copy != NULL) {
+        install_target = install_copy;
+    } else {
+        if (snprintf(install_buf, sizeof install_buf, "%s", exe_dir) >= (int)sizeof install_buf) {
+            free(pkg_copy);
+            free(install_copy);
+            return UPDATE_ERROR;
+        }
+        install_target = install_buf;
+    }
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    if (snprintf(updater_path, sizeof updater_path, "%s/updater.exe", exe_dir) >= (int)sizeof updater_path) {
+        free(pkg_copy);
+        free(install_copy);
+        return UPDATE_ERROR;
+    }
+#else
+    if (snprintf(updater_path, sizeof updater_path, "%s/updater", exe_dir) >= (int)sizeof updater_path) {
+        free(pkg_copy);
+        free(install_copy);
+        return UPDATE_ERROR;
+    }
+#endif
+
+    if (snprintf(pid_buf, sizeof pid_buf, "%d", platform_process_get_current_pid()) >= (int)sizeof pid_buf) {
+        free(pkg_copy);
+        free(install_copy);
+        return UPDATE_ERROR;
+    }
+
+    spawn_argv[0] = updater_path;
+    spawn_argv[1] = "--install";
+    spawn_argv[2] = pkg_copy;
+    spawn_argv[3] = "--target";
+    spawn_argv[4] = install_target;
+    spawn_argv[5] = "--pid";
+    spawn_argv[6] = pid_buf;
+    spawn_argv[7] = "--app";
+    spawn_argv[8] = exe_path;
+    spawn_argv[9] = NULL;
+
+    spawn_rc = platform_process_spawn(updater_path, spawn_argv, &child_pid);
+    free(pkg_copy);
+    free(install_copy);
+
+    if (spawn_rc != PLATFORM_OK) {
+        return UPDATE_ERROR;
+    }
+
+    (void)child_pid;
+    (void)fflush(NULL);
+    exit(0);
 }
 
 int update_perform(void)

@@ -105,6 +105,15 @@ UPDATE_API int update_relaunch_app(const char *executable_path);
 UPDATE_API int update_init(const update_options_t *opts);
 UPDATE_API int update_check(update_info_t *out);
 UPDATE_API int update_download(const char *dest_path);
+
+/**
+ * Spawns `<exe_dir>/updater(.exe)` with:
+ *   --install <package_path> --target <install_dir> --pid <current_pid> --app <exe_path>
+ * install_dir is options.install_dir when set, otherwise the directory of the current executable.
+ * Windows: arguments are joined with MSVC-compatible quoting for CreateProcessA.
+ * POSIX: argv is passed to execv (no shell, no extra escaping).
+ * On success, flushes stdio and terminates the process with exit(0) (does not return).
+ */
 UPDATE_API int update_apply(const char *package_path);
 UPDATE_API int update_perform(void);
 
