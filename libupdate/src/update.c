@@ -247,7 +247,7 @@ UPDATE_API int update_verify(const char *file, const char *expected_hash)
     return UPDATE_OK;
 }
 
-int update_init(const update_options_t *opts)
+UPDATE_API int update_init(const update_options_t *opts)
 {
     ctx_lock();
 
@@ -328,7 +328,15 @@ int update_init(const update_options_t *opts)
     return UPDATE_OK;
 }
 
-void update_set_download_progress_callback(update_download_progress_fn cb, void *user)
+UPDATE_API void update_shutdown(void)
+{
+    ctx_lock();
+    context_free_strings(&s_ctx);
+    memset(&s_ctx, 0, sizeof(s_ctx));
+    ctx_unlock();
+}
+
+UPDATE_API void update_set_download_progress_callback(update_download_progress_fn cb, void *user)
 {
     ctx_lock();
     if (!is_initialized()) {
@@ -352,7 +360,7 @@ UPDATE_API void update_set_package_signature_verifier(update_verify_signature_fn
     ctx_unlock();
 }
 
-int update_check(update_info_t *out)
+UPDATE_API int update_check(update_info_t *out)
 {
     char *url_copy = NULL;
     update_http_progress_fn prog;
@@ -387,13 +395,17 @@ int update_check(update_info_t *out)
     return rc;
 }
 
-int update_download(const char *dest_path)
+UPDATE_API int update_download(const char *url, const char *dest_path)
 {
     char *url_copy = NULL;
     char *expect_copy = NULL;
     update_http_progress_fn prog;
     void *prog_ud;
     int http_rc;
+
+    if (url == NULL || url[0] == '\0') {
+        return UPDATE_ERROR;
+    }
 
     ctx_lock();
 
@@ -412,12 +424,7 @@ int update_download(const char *dest_path)
         return UPDATE_ERROR;
     }
 
-    if (s_ctx.update_url == NULL || s_ctx.update_url[0] == '\0') {
-        ctx_unlock();
-        return UPDATE_ERROR;
-    }
-
-    url_copy = dup_str(s_ctx.update_url);
+    url_copy = dup_str(url);
     expect_copy = dup_str(s_ctx.expected_sha256);
     prog = s_ctx.progress_cb;
     prog_ud = s_ctx.progress_userdata;
@@ -449,10 +456,6 @@ int update_download(const char *dest_path)
     return UPDATE_OK;
 }
 
-/**
- * Spawns updater with package_path. Returns 0 on success, -1 on failure.
- * Frees internal copies before returning.
- */
 static int update_apply_spawn(const char *package_path)
 {
     char exe_path[UPDATE_APPLY_PATH_MAX];

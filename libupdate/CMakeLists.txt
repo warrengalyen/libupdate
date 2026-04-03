@@ -8,6 +8,7 @@ add_library(update SHARED
     src/update_remote_check.c
     src/update_ops.c
     src/update_extract.c
+    src/json_mini.c
     src/sha256.c
     src/platform_process.c
     src/platform_fs.c

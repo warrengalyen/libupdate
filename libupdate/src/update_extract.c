@@ -276,7 +276,7 @@ UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
 
         (void)platform_fs_remove_path(tmp_path);
 
-        if (ensure_parent_dirs(full_path) != PLATFORM_OK) {
+        if (ensure_parent_dirs(full_path) != 0) {
             goto cleanup_zip;
         }
 

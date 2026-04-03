@@ -25,17 +25,14 @@ int updater_state_build_path(char *out, size_t cap, const char *install_dir);
 
 int updater_state_load(const char *state_path, updater_state_t *st, int *out_found);
 
-/** Returns 0 if state matches this run (paths + package), else non-zero. */
+/** Returns 0 if state matches this run's paths and package. */
 int updater_state_validate(const updater_state_t *st,
     const char *install_dir,
     const char *staging,
     const char *backup,
     const char *zip_path);
 
-/**
- * Uses filesystem layout under install_dir / staging / backup.
- * out_found from load: if no valid state, pass *out_found == 0 and NULL st (or ignore st).
- */
+/** Determine resume point from filesystem layout and saved state. */
 int updater_determine_resume(const char *install_dir,
     const char *staging,
     const char *backup,

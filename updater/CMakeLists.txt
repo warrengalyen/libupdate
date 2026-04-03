@@ -1,6 +1,13 @@
-add_executable(updater main.c update_state.c)
+add_executable(updater
+    main.c
+    update_state.c
+    "${CMAKE_SOURCE_DIR}/libupdate/src/json_mini.c"
+)
 
-target_include_directories(updater PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(updater PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/libupdate/src
+)
 
 target_link_libraries(updater PRIVATE update)
 

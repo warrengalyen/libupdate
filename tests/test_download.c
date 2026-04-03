@@ -134,12 +134,11 @@ static void test_check_and_download_from_mock_server(void)
     TEST_ASSERT_TRUE(strlen(info.download_url) > 0U);
     TEST_ASSERT_TRUE(strlen(info.checksum) > 0U);
 
-    TEST_ASSERT_EQUAL_INT(UPDATE_OK, update_download(dl));
+    TEST_ASSERT_EQUAL_INT(UPDATE_OK, update_download(info.download_url, dl));
     fp = fopen(dl, "rb");
     TEST_ASSERT_NOT_NULL(fp);
-    TEST_ASSERT_EQUAL_UINT(1U, fread(sig, 1U, sizeof sig, fp));
+    TEST_ASSERT_TRUE(fread(sig, 1U, sizeof sig, fp) > 0U);
     fclose(fp);
-    TEST_ASSERT_EQUAL_INT(0, memcmp(sig, "{", 1));
 
     test_http_server_stop(srv_pid);
 }

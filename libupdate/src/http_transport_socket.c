@@ -1,3 +1,11 @@
+/*
+ * Plain HTTP/1.1 transport (POSIX sockets).
+ *
+ * Limitations:
+ *   - HTTPS is not supported. Use the WinHTTP backend on Windows for TLS.
+ *   - HTTP redirects (301/302/307) are not followed.
+ */
+
 #include "http_transport.h"
 #include "platform_fs.h"
 
@@ -19,22 +27,6 @@ typedef struct {
     size_t pfx_pos;
     int fd;
 } io_src;
-
-static char *temp_path_for(const char *dest)
-{
-    static const char suf[] = ".download";
-    size_t n;
-    char *t;
-
-    n = strlen(dest) + sizeof(suf);
-    t = (char *)malloc(n);
-    if (t == NULL) {
-        return NULL;
-    }
-    memcpy(t, dest, strlen(dest) + 1U);
-    (void)strcat(t, suf);
-    return t;
-}
 
 static int recv_fd(int fd, void *buf, size_t cap)
 {
@@ -473,7 +465,7 @@ int update_http_stream_download(const char *url,
         return -1;
     }
 
-    tmp_path = temp_path_for(dest_path);
+    tmp_path = http_temp_path_for(dest_path);
     if (tmp_path == NULL) {
         return -1;
     }

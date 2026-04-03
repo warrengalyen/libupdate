@@ -1,3 +1,11 @@
+/*
+ * WinHTTP transport (Windows). Supports HTTPS via system TLS.
+ *
+ * Limitations:
+ *   - HTTP redirects (301/302/307) are not explicitly followed (WinHTTP
+ *     auto-redirects by default, but no custom handling is done).
+ */
+
 #include "http_transport.h"
 #include "platform_fs.h"
 
@@ -34,22 +42,6 @@ static wchar_t *utf8_to_wide(const char *s)
     }
 
     return w;
-}
-
-static char *temp_path_for(const char *dest)
-{
-    static const char suf[] = ".download";
-    size_t n;
-    char *t;
-
-    n = strlen(dest) + sizeof(suf);
-    t = (char *)malloc(n);
-    if (t == NULL) {
-        return NULL;
-    }
-    memcpy(t, dest, strlen(dest) + 1U);
-    (void)strcat(t, suf);
-    return t;
 }
 
 static int winhttp_parse_url(const char *url,
@@ -157,7 +149,7 @@ int update_http_stream_download(const char *url,
         return -1;
     }
 
-    tmp_path = temp_path_for(dest_path);
+    tmp_path = http_temp_path_for(dest_path);
     if (tmp_path == NULL) {
         return -1;
     }
