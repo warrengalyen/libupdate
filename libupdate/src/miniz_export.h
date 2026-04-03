@@ -1,4 +1,4 @@
-/* Stub for vendored miniz (CMake export macros not used). */
+/* Miniz expects this header when not built via miniz's own CMake (MINIZ_EXPORT). */
 #ifndef MINIZ_EXPORT_H
 #define MINIZ_EXPORT_H
 

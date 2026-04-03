@@ -1,3 +1,7 @@
+if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz.h")
+    message(FATAL_ERROR "miniz submodule missing: run \"git submodule update --init libupdate/third_party/miniz\"")
+endif ()
+
 add_library(update SHARED
     src/update.c
     src/update_path.c
@@ -7,10 +11,10 @@ add_library(update SHARED
     src/sha256.c
     src/platform_process.c
     src/platform_fs.c
-    third_party/miniz/miniz.c
-    third_party/miniz/miniz_tinfl.c
-    third_party/miniz/miniz_tdef.c
-    third_party/miniz/miniz_zip.c
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz_tinfl.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz_tdef.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz_zip.c"
 )
 
 if (WIN32 AND NOT CYGWIN)

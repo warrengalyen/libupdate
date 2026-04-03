@@ -2,3 +2,9 @@
 	path = tests/third_party/Unity
 	url = https://github.com/ThrowTheSwitch/Unity.git
 	shallow = true
+
+[submodule "libupdate/third_party/miniz"]
+	path = libupdate/third_party/miniz
+	url = https://github.com/richgel999/miniz.git
+	shallow = true
+	branch = master

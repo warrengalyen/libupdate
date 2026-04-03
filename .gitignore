@@ -1,2 +1,6 @@
 build/
 bin/
+
+# 3rd party dependencies
+/libupdate/third_party/miniz
+/tests/third_party/Unity
