@@ -56,6 +56,10 @@ if (WIN32 AND (MINGW OR MSYS))
     set_target_properties(update PROPERTIES PREFIX "")
 endif ()
 
+if (LIBUPDATE_BUILD_TESTS)
+    target_compile_definitions(update PRIVATE UPDATE_BUILD_TEST_HOOKS)
+endif ()
+
 set(LIBUPDATE_ROOT_BIN_DIR "${CMAKE_SOURCE_DIR}/bin")
 add_custom_command(
     TARGET update

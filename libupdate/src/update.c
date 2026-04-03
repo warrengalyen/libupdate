@@ -731,3 +731,33 @@ UPDATE_API int update_perform(void)
 
     return UPDATE_STARTED;
 }
+
+#if defined(UPDATE_BUILD_TEST_HOOKS)
+UPDATE_API const char *update_test_get_install_dir(void)
+{
+    const char *p;
+
+    ctx_lock();
+    p = s_ctx.install_dir;
+    ctx_unlock();
+    return p;
+}
+
+UPDATE_API const char *update_test_get_update_url(void)
+{
+    const char *p;
+
+    ctx_lock();
+    p = s_ctx.update_url;
+    ctx_unlock();
+    return p;
+}
+
+UPDATE_API void update_test_reset_context(void)
+{
+    ctx_lock();
+    context_free_strings(&s_ctx);
+    memset(&s_ctx, 0, sizeof(s_ctx));
+    ctx_unlock();
+}
+#endif
