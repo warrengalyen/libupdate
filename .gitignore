@@ -1,5 +1,6 @@
 build/
 bin/
+scripts/
 
 # 3rd party dependencies
 /libupdate/third_party/miniz
