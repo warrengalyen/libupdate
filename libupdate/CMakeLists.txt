@@ -24,6 +24,14 @@ if (WIN32 AND NOT CYGWIN)
 else ()
     target_sources(update PRIVATE src/http_transport_socket.c)
     target_compile_definitions(update PRIVATE _DEFAULT_SOURCE)
+
+    find_package(OpenSSL QUIET)
+    if (OpenSSL_FOUND)
+        target_compile_definitions(update PRIVATE LIBUPDATE_HAVE_OPENSSL)
+        target_link_libraries(update PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    else ()
+        message(WARNING "OpenSSL not found: HTTPS will not be available on this platform")
+    endif ()
 endif ()
 
 # update.c uses pthread except on native Windows (SRWLOCK). Cygwin may set WIN32.

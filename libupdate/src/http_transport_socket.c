@@ -1,8 +1,7 @@
 /*
- * Plain HTTP/1.1 transport (POSIX sockets).
+ * HTTP/1.1 transport (POSIX sockets) with optional OpenSSL TLS.
  *
  * Limitations:
- *   - HTTPS is not supported. Use the WinHTTP backend on Windows for TLS.
  *   - HTTP redirects (301/302/307) are not followed.
  */
 
@@ -21,21 +20,134 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef LIBUPDATE_HAVE_OPENSSL
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#endif
+
+/* ── connection abstraction ─────────────────────────────────────── */
+
+typedef struct {
+    int fd;
+#ifdef LIBUPDATE_HAVE_OPENSSL
+    SSL_CTX *ssl_ctx;
+    SSL *ssl;
+#endif
+} conn_t;
+
+static void conn_init(conn_t *c)
+{
+    c->fd = -1;
+#ifdef LIBUPDATE_HAVE_OPENSSL
+    c->ssl_ctx = NULL;
+    c->ssl = NULL;
+#endif
+}
+
+static int conn_connect(conn_t *c, struct addrinfo *ai, const char *host, int use_tls)
+{
+    c->fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (c->fd < 0) {
+        return -1;
+    }
+
+    if (connect(c->fd, ai->ai_addr, ai->ai_addrlen) != 0) {
+        return -1;
+    }
+
+    if (!use_tls) {
+        return 0;
+    }
+
+#ifdef LIBUPDATE_HAVE_OPENSSL
+    c->ssl_ctx = SSL_CTX_new(TLS_client_method());
+    if (c->ssl_ctx == NULL) {
+        return -1;
+    }
+
+    SSL_CTX_set_default_verify_paths(c->ssl_ctx);
+    SSL_CTX_set_verify(c->ssl_ctx, SSL_VERIFY_PEER, NULL);
+
+    c->ssl = SSL_new(c->ssl_ctx);
+    if (c->ssl == NULL) {
+        return -1;
+    }
+
+    SSL_set_tlsext_host_name(c->ssl, host);
+    SSL_set_fd(c->ssl, c->fd);
+
+    if (SSL_connect(c->ssl) != 1) {
+        return -1;
+    }
+
+    return 0;
+#else
+    (void)host;
+    return -1;
+#endif
+}
+
+static int conn_send(conn_t *c, const void *buf, size_t len)
+{
+#ifdef LIBUPDATE_HAVE_OPENSSL
+    if (c->ssl != NULL) {
+        int w = SSL_write(c->ssl, buf, (int)len);
+        return w == (int)len ? 0 : -1;
+    }
+#endif
+    {
+        ssize_t w = send(c->fd, buf, len, 0);
+        return w == (ssize_t)len ? 0 : -1;
+    }
+}
+
+static int conn_recv(conn_t *c, void *buf, size_t cap)
+{
+#ifdef LIBUPDATE_HAVE_OPENSSL
+    if (c->ssl != NULL) {
+        int r = SSL_read(c->ssl, buf, (int)cap);
+        if (r < 0) {
+            return -1;
+        }
+        return r;
+    }
+#endif
+    {
+        ssize_t r = recv(c->fd, buf, cap, 0);
+        if (r < 0) {
+            return -1;
+        }
+        return (int)r;
+    }
+}
+
+static void conn_close(conn_t *c)
+{
+#ifdef LIBUPDATE_HAVE_OPENSSL
+    if (c->ssl != NULL) {
+        SSL_shutdown(c->ssl);
+        SSL_free(c->ssl);
+        c->ssl = NULL;
+    }
+    if (c->ssl_ctx != NULL) {
+        SSL_CTX_free(c->ssl_ctx);
+        c->ssl_ctx = NULL;
+    }
+#endif
+    if (c->fd >= 0) {
+        (void)close(c->fd);
+        c->fd = -1;
+    }
+}
+
+/* ── buffered reader over conn_t ────────────────────────────────── */
+
 typedef struct {
     const unsigned char *pfx;
     size_t pfx_len;
     size_t pfx_pos;
-    int fd;
+    conn_t *conn;
 } io_src;
-
-static int recv_fd(int fd, void *buf, size_t cap)
-{
-    ssize_t r = recv(fd, buf, cap, 0);
-    if (r < 0) {
-        return -1;
-    }
-    return (int)r;
-}
 
 static int src_read(io_src *s, void *buf, size_t cap)
 {
@@ -55,7 +167,7 @@ static int src_read(io_src *s, void *buf, size_t cap)
         }
 
         {
-            int rd = recv_fd(s->fd, out + got, cap - got);
+            int rd = conn_recv(s->conn, out + got, cap - got);
             if (rd < 0) {
                 return -1;
             }
@@ -68,6 +180,8 @@ static int src_read(io_src *s, void *buf, size_t cap)
 
     return (int)got;
 }
+
+/* ── helpers ─────────────────────────────────────────────────────── */
 
 static int append_grow(char **buf, size_t *len, size_t *cap, const void *chunk, size_t chunk_len)
 {
@@ -95,7 +209,7 @@ static int append_grow(char **buf, size_t *len, size_t *cap, const void *chunk, 
     return 0;
 }
 
-static int read_http_headers(int fd, char **out_headers, size_t *out_total_len)
+static int read_http_headers(conn_t *c, char **out_headers, size_t *out_total_len)
 {
     char *buf = NULL;
     size_t len = 0U;
@@ -103,7 +217,7 @@ static int read_http_headers(int fd, char **out_headers, size_t *out_total_len)
 
     for (;;) {
         char tmp[2048];
-        int rd = recv_fd(fd, tmp, sizeof(tmp));
+        int rd = conn_recv(c, tmp, sizeof(tmp));
         if (rd < 0) {
             free(buf);
             return -1;
@@ -135,6 +249,7 @@ static int parse_http_url(const char *url,
     size_t hostcap,
     char *path,
     size_t pathcap,
+    int *out_tls,
     unsigned *port_out)
 {
     const char *p;
@@ -144,13 +259,17 @@ static int parse_http_url(const char *url,
     size_t hostlen;
 
     if (strncmp(url, "https://", 8) == 0) {
-        return -1;
-    }
-    if (strncmp(url, "http://", 7) != 0) {
+        *out_tls = 1;
+        *port_out = 443U;
+        p = url + 8U;
+    } else if (strncmp(url, "http://", 7) == 0) {
+        *out_tls = 0;
+        *port_out = 80U;
+        p = url + 7U;
+    } else {
         return -1;
     }
 
-    p = url + 7U;
     pathstart = strchr(p, '/');
     if (pathstart == NULL) {
         host_end = p + strlen(p);
@@ -164,7 +283,6 @@ static int parse_http_url(const char *url,
         }
         path[0] = '/';
         path[1] = '\0';
-        *port_out = 80U;
         return 0;
     }
 
@@ -179,7 +297,7 @@ static int parse_http_url(const char *url,
         host[hostlen] = '\0';
         *port_out = (unsigned)strtoul(colon + 1U, NULL, 10);
         if (*port_out == 0U) {
-            *port_out = 80U;
+            *port_out = *out_tls ? 443U : 80U;
         }
     } else {
         hostlen = (size_t)(host_end - p);
@@ -188,7 +306,6 @@ static int parse_http_url(const char *url,
         }
         memcpy(host, p, hostlen);
         host[hostlen] = '\0';
-        *port_out = 80U;
     }
 
     {
@@ -306,6 +423,8 @@ static int parse_content_length(const char *headers, unsigned long long *out_len
     return 0;
 }
 
+/* ── body readers (file destination) ────────────────────────────── */
+
 static int read_line_src(io_src *s, char *line, size_t cap)
 {
     size_t pos = 0U;
@@ -384,17 +503,19 @@ static int read_body_chunked_src(io_src *s,
             if (want > sizeof(buf)) {
                 want = sizeof(buf);
             }
-            int rd = src_read(s, buf, want);
-            if (rd <= 0) {
-                return -1;
-            }
-            if (fwrite(buf, 1U, (size_t)rd, out) != (size_t)rd) {
-                return -1;
-            }
-            i += (unsigned long long)(size_t)rd;
-            done += (unsigned long long)(size_t)rd;
-            if (on_progress != NULL) {
-                on_progress(done, 0ULL, progress_user);
+            {
+                int rd = src_read(s, buf, want);
+                if (rd <= 0) {
+                    return -1;
+                }
+                if (fwrite(buf, 1U, (size_t)rd, out) != (size_t)rd) {
+                    return -1;
+                }
+                i += (unsigned long long)(size_t)rd;
+                done += (unsigned long long)(size_t)rd;
+                if (on_progress != NULL) {
+                    on_progress(done, 0ULL, progress_user);
+                }
             }
         }
 
@@ -435,6 +556,8 @@ static int read_body_until_close_src(io_src *s,
     return 0;
 }
 
+/* ── stream download ────────────────────────────────────────────── */
+
 int update_http_stream_download(const char *url,
     const char *dest_path,
     update_http_progress_fn on_progress,
@@ -443,10 +566,11 @@ int update_http_stream_download(const char *url,
     char host[512];
     char path[4096];
     unsigned port = 80U;
+    int use_tls = 0;
     char portbuf[16];
     struct addrinfo hints;
     struct addrinfo *res = NULL;
-    int sockfd = -1;
+    conn_t conn;
     char req[8192];
     int req_len;
     char *headers = NULL;
@@ -465,12 +589,14 @@ int update_http_stream_download(const char *url,
         return -1;
     }
 
+    conn_init(&conn);
+
     tmp_path = http_temp_path_for(dest_path);
     if (tmp_path == NULL) {
         return -1;
     }
 
-    if (parse_http_url(url, host, sizeof(host), path, sizeof(path), &port) != 0) {
+    if (parse_http_url(url, host, sizeof(host), path, sizeof(path), &use_tls, &port) != 0) {
         goto cleanup;
     }
 
@@ -485,12 +611,7 @@ int update_http_stream_download(const char *url,
         goto cleanup;
     }
 
-    sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (sockfd < 0) {
-        goto cleanup;
-    }
-
-    if (connect(sockfd, res->ai_addr, res->ai_addrlen) != 0) {
+    if (conn_connect(&conn, res, host, use_tls) != 0) {
         goto cleanup;
     }
 
@@ -507,14 +628,11 @@ int update_http_stream_download(const char *url,
         goto cleanup;
     }
 
-    {
-        ssize_t wr = send(sockfd, req, (size_t)req_len, 0);
-        if (wr != (ssize_t)req_len) {
-            goto cleanup;
-        }
+    if (conn_send(&conn, req, (size_t)req_len) != 0) {
+        goto cleanup;
     }
 
-    if (read_http_headers(sockfd, &headers, &header_total) != 0) {
+    if (read_http_headers(&conn, &headers, &header_total) != 0) {
         goto cleanup;
     }
 
@@ -536,7 +654,7 @@ int update_http_stream_download(const char *url,
     src.pfx = (const unsigned char *)body_sep;
     src.pfx_len = body_prefix;
     src.pfx_pos = 0U;
-    src.fd = sockfd;
+    src.conn = &conn;
 
     out = fopen(tmp_path, "wb");
     if (out == NULL) {
@@ -573,9 +691,7 @@ cleanup:
     if (out != NULL) {
         (void)fclose(out);
     }
-    if (sockfd >= 0) {
-        (void)close(sockfd);
-    }
+    conn_close(&conn);
     if (res != NULL) {
         freeaddrinfo(res);
     }
@@ -586,6 +702,8 @@ cleanup:
     free(tmp_path);
     return rc;
 }
+
+/* ── in-memory fetch ────────────────────────────────────────────── */
 
 #define UPDATE_HTTP_FETCH_MAX (512U * 1024U)
 
@@ -662,17 +780,19 @@ static int read_body_chunked_src_mem(io_src *s,
             if (want > sizeof(tmp)) {
                 want = sizeof(tmp);
             }
-            int rd = src_read(s, tmp, want);
-            if (rd <= 0) {
-                return -1;
-            }
-            if (mem_append(buf, len, cap, tmp, (size_t)rd) != 0) {
-                return -1;
-            }
-            i += (unsigned long long)(size_t)rd;
-            done += (unsigned long long)(size_t)rd;
-            if (on_progress != NULL) {
-                on_progress(done, 0ULL, progress_user);
+            {
+                int rd = src_read(s, tmp, want);
+                if (rd <= 0) {
+                    return -1;
+                }
+                if (mem_append(buf, len, cap, tmp, (size_t)rd) != 0) {
+                    return -1;
+                }
+                i += (unsigned long long)(size_t)rd;
+                done += (unsigned long long)(size_t)rd;
+                if (on_progress != NULL) {
+                    on_progress(done, 0ULL, progress_user);
+                }
             }
         }
 
@@ -724,10 +844,11 @@ int update_http_fetch(const char *url,
     char host[512];
     char path[4096];
     unsigned port = 80U;
+    int use_tls = 0;
     char portbuf[16];
     struct addrinfo hints;
     struct addrinfo *res = NULL;
-    int sockfd = -1;
+    conn_t conn;
     char req[8192];
     int req_len;
     char *headers = NULL;
@@ -747,10 +868,12 @@ int update_http_fetch(const char *url,
         return -1;
     }
 
+    conn_init(&conn);
+
     *out_body = NULL;
     *out_len = 0U;
 
-    if (parse_http_url(url, host, sizeof(host), path, sizeof(path), &port) != 0) {
+    if (parse_http_url(url, host, sizeof(host), path, sizeof(path), &use_tls, &port) != 0) {
         return -1;
     }
 
@@ -765,12 +888,7 @@ int update_http_fetch(const char *url,
         return -1;
     }
 
-    sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (sockfd < 0) {
-        goto cleanup;
-    }
-
-    if (connect(sockfd, res->ai_addr, res->ai_addrlen) != 0) {
+    if (conn_connect(&conn, res, host, use_tls) != 0) {
         goto cleanup;
     }
 
@@ -787,14 +905,11 @@ int update_http_fetch(const char *url,
         goto cleanup;
     }
 
-    {
-        ssize_t wr = send(sockfd, req, (size_t)req_len, 0);
-        if (wr != (ssize_t)req_len) {
-            goto cleanup;
-        }
+    if (conn_send(&conn, req, (size_t)req_len) != 0) {
+        goto cleanup;
     }
 
-    if (read_http_headers(sockfd, &headers, &header_total) != 0) {
+    if (read_http_headers(&conn, &headers, &header_total) != 0) {
         goto cleanup;
     }
 
@@ -816,7 +931,7 @@ int update_http_fetch(const char *url,
     src.pfx = (const unsigned char *)body_sep;
     src.pfx_len = body_prefix;
     src.pfx_pos = 0U;
-    src.fd = sockfd;
+    src.conn = &conn;
 
     if (chunked != 0) {
         if (read_body_chunked_src_mem(&src, &body, &blen, &bcap, on_progress, progress_user) != 0) {
@@ -840,9 +955,7 @@ int update_http_fetch(const char *url,
 
 cleanup:
     free(body);
-    if (sockfd >= 0) {
-        (void)close(sockfd);
-    }
+    conn_close(&conn);
     if (res != NULL) {
         freeaddrinfo(res);
     }
