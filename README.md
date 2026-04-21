@@ -1,6 +1,6 @@
 # libupdate
 
-An application self-update library. Ships as a shared library (`update.dll` / `libupdate.so`) and a standalone `updater` executable that performs the file replacement while the main application is not running.
+A cross-platform C library for secure, self-updating desktop applications. It provides a minimal API to check for updates from a JSON manifest, download verified ZIP packages, and safely apply them using a separate updater executable with atomic replacement and automatic rollback. Designed for reuse across projects, it requires no configuration files. Ships as a shared library (`update.dll` / `libupdate.so`) and a standalone `updater` executable that performs the file replacement while the main application is not running.
 
 ## How it works
 
@@ -27,7 +27,7 @@ The remote URL should serve a JSON object:
 Requires CMake 3.16+ and a C11 compiler. Python 3 is needed to generate test fixtures.
 
 ```bash
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/warrengalyen/libupdate
 cd libupdate
 cmake -B build
 cmake --build build
