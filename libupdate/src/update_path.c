@@ -6,6 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
 #ifndef UPDATE_PATH_MAX
     #if defined(PATH_MAX) && PATH_MAX > 4096
         #define UPDATE_PATH_MAX PATH_MAX
@@ -207,6 +212,42 @@ UPDATE_API int update_validate_path(const char *path, unsigned flags)
     return UPDATE_OK;
 }
 
+UPDATE_API int update_path_make_absolute(const char *path, char *out, size_t out_cap)
+{
+    if (path == NULL || path[0] == '\0' || out == NULL || out_cap == 0U) {
+        return UPDATE_ERROR;
+    }
+    if (path_has_bad_chars(path) != 0 || path_rejects_dot_segments(path) != 0) {
+        return UPDATE_ERROR;
+    }
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    {
+        DWORD n;
+        n = GetFullPathNameA(path, (DWORD)out_cap, out, NULL);
+        if (n == 0U || n >= (DWORD)out_cap) {
+            return UPDATE_ERROR;
+        }
+        return UPDATE_OK;
+    }
+#else
+    if (path_is_absolute(path) != 0) {
+        if (snprintf(out, out_cap, "%s", path) >= (int)out_cap) {
+            return UPDATE_ERROR;
+        }
+        return UPDATE_OK;
+    }
+    {
+        char cwd[UPDATE_PATH_MAX];
+        if (getcwd(cwd, sizeof cwd) == NULL) {
+            return UPDATE_ERROR;
+        }
+        if (snprintf(out, out_cap, "%s/%s", cwd, path) >= (int)out_cap) {
+            return UPDATE_ERROR;
+        }
+        return UPDATE_OK;
+    }
+#endif
+}
 UPDATE_API int update_validate_install_paths(const char *zip_path,
     const char *install_dir,
     const char *staging_dir,

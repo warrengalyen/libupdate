@@ -1,6 +1,7 @@
 #ifndef UPDATE_H
 #define UPDATE_H
 
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,7 +33,7 @@ typedef struct {
 /** Populated by update_check on UPDATE_AVAILABLE. */
 typedef struct {
     char version[32];
-    char download_url[512];
+    char download_url[2048];
     char checksum[65];
 } update_info_t;
 
@@ -62,6 +63,7 @@ UPDATE_API int update_verify(const char *file, const char *expected_hash);
 /** Reject control chars, ".." segments, reserved names, and over-long paths. */
 UPDATE_API int update_validate_path(const char *path, unsigned flags);
 
+UPDATE_API int update_path_make_absolute(const char *path, char *out, size_t out_cap);
 /** Validate that staging/backup/state paths are canonical for install_dir. */
 UPDATE_API int update_validate_install_paths(const char *zip_path,
     const char *install_dir,
@@ -81,6 +83,10 @@ UPDATE_API int update_wait_for_parent_exit(int parent_pid);
 
 /** Recursively copy src_dir into dst_dir with retries. */
 UPDATE_API int update_copy_tree(const char *src_dir, const char *dst_dir);
+UPDATE_API int update_copy_tree_best_effort(const char *src_dir, const char *dst_dir);
+UPDATE_API int update_copy_tree_stage_overlay(const char *src_dir, const char *dst_dir);
+UPDATE_API int update_merge_overlay_install(const char *install_dir, const char *backup_dir, const char *staging_dir);
+UPDATE_API int update_recreate_install_from_backup(const char *install_dir, const char *backup_dir);
 
 /** Recursively remove a file or directory tree with retries. */
 UPDATE_API int update_remove_tree(const char *path);

@@ -22,29 +22,6 @@
     #endif
 #endif
 
-static int path_canonicalize_dest(const char *path, char *out, size_t cap)
-{
-#if defined(_WIN32) && !defined(__CYGWIN__)
-    DWORD n;
-    if (path == NULL || out == NULL || cap == 0U) {
-        return -1;
-    }
-    n = GetFullPathNameA(path, (DWORD)cap, out, NULL);
-    if (n == 0U || n >= (DWORD)cap) {
-        return -1;
-    }
-    return 0;
-#else
-    if (path == NULL || out == NULL) {
-        return -1;
-    }
-    if (realpath(path, out) == NULL) {
-        return -1;
-    }
-    return 0;
-#endif
-}
-
 static size_t strip_trailing_seps_len(const char *s, size_t len)
 {
     while (len > 0U && (s[len - 1U] == '/' || s[len - 1U] == '\\')) {
@@ -199,7 +176,8 @@ static int ensure_parent_dirs(const char *file_path)
 UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
 {
     mz_zip_archive zip;
-    char dest_canon[UPDATE_EXTRACT_PATH_MAX];
+    char dest_abs[UPDATE_EXTRACT_PATH_MAX];
+    char zip_abs[UPDATE_EXTRACT_PATH_MAX];
     mz_uint i;
     mz_uint n;
     int rc = UPDATE_ERROR;
@@ -212,16 +190,21 @@ UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
         return UPDATE_ERROR;
     }
 
-    if (platform_fs_create_directory_recursive(dest_dir) != PLATFORM_OK) {
+    if (update_path_make_absolute(zip_path, zip_abs, sizeof zip_abs) != UPDATE_OK
+        || update_path_make_absolute(dest_dir, dest_abs, sizeof dest_abs) != UPDATE_OK) {
         return UPDATE_ERROR;
     }
 
-    if (path_canonicalize_dest(dest_dir, dest_canon, sizeof(dest_canon)) != 0) {
+    if (update_validate_path(zip_abs, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+        || update_validate_path(dest_abs, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
+        return UPDATE_ERROR;
+    }
+    if (platform_fs_create_directory_recursive(dest_abs) != PLATFORM_OK) {
         return UPDATE_ERROR;
     }
 
     memset(&zip, 0, sizeof(zip));
-    if (mz_zip_reader_init_file(&zip, zip_path, 0) == MZ_FALSE) {
+    if (mz_zip_reader_init_file(&zip, zip_abs, 0) == MZ_FALSE) {
         return UPDATE_ERROR;
     }
 
@@ -244,11 +227,11 @@ UPDATE_API int update_extract(const char *zip_path, const char *dest_dir)
             goto cleanup_zip;
         }
 
-        if (join_dest_entry(dest_canon, st.m_filename, full_path, sizeof(full_path)) != 0) {
+        if (join_dest_entry(dest_abs, st.m_filename, full_path, sizeof(full_path)) != 0) {
             goto cleanup_zip;
         }
 
-        if (path_under_dest_prefix(dest_canon, full_path) == 0) {
+        if (path_under_dest_prefix(dest_abs, full_path) == 0) {
             goto cleanup_zip;
         }
 

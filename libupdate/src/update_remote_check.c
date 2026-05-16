@@ -91,7 +91,7 @@ int update_remote_check(const char *url,
     char *body = NULL;
     size_t blen = 0U;
     char ver[256];
-    char durl[768];
+    char durl[2048];
     char cks[96];
     int newer;
 

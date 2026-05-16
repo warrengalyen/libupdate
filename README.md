@@ -1,14 +1,12 @@
 # libupdate
 
-A cross-platform C library for secure, self-updating desktop applications. It provides a minimal API to check for updates from a JSON manifest, download verified ZIP packages, and safely apply them using a separate updater executable with atomic replacement and automatic rollback. Designed for reuse across projects, it requires no configuration files. Ships as a shared library (`update.dll` / `libupdate.so`) and a standalone `updater` executable that performs the file replacement while the main application is not running.
+A cross-platform C library for secure, self-updating desktop applications. It provides a minimal API to check for updates from a JSON manifest, download verified ZIP packages, and safely apply them using a separate **updater** executable while the main application exits. Designed for reuse across projects, it requires no configuration files. Ships as a shared library (`update.dll` / `libupdate.so`) and a standalone `updater` / `updater.exe` that performs file replacement and relaunches the app.
 
 ## How it works
 
-1. Your app calls `update_check` to fetch a JSON manifest from a remote URL.
-2. If a newer version is available, download the ZIP package with `update_download`.
-3. Call `update_apply` (or the all-in-one `update_perform`) to spawn the `updater` process, which waits for your app to exit, extracts the ZIP over the install directory, and relaunches the app.
-
-The updater uses atomic rename + backup so a failed install can be rolled back.
+1. **`update_check`** reads the manifest; **`update_download`** (or **`update_perform`**) fetches the ZIP.
+2. **`update_apply`** spawns **`updater`** next to your executable (package path, install dir, parent PID, app name), then **exits** on success so the updater can run.
+3. The updater waits for the app to exit, extracts to **`*.update_staging`**, keeps a copy of the old tree under **`*.update_backup`** (rename when possible; otherwise a **full-tree copy** when the install root cannot be renamed), overlays files from staging onto the install, swaps **`updater_new` -> `updater`**, then cleans up and relaunches the app.
 
 ## Manifest format
 
@@ -70,6 +68,7 @@ On native Windows (WinHTTP), also set `LIBUPDATE_INTEGRATION_WINHTTP=1`.
 
 ## Usage
 
+Paths: `update_init` rejects non-absolute `install_dir` and `temp_dir` when those options are set. `update_download` requires an **absolute** destination path. Use `update_path_make_absolute` when you only have a relative path (e.g. built from user input or `./update.zip`).
 ### One-shot update (check + download + apply)
 
 ```c
@@ -79,7 +78,9 @@ int main(void)
 {
     update_options_t opts = {0};
     opts.update_url = "https://example.com/update.json";
-    opts.app_name   = "myapp";
+    opts.app_name    = "myapp.exe"; /* argv[0]-style name passed to updater; can be relative to install_dir */
+    opts.install_dir = "C:\\Program Files\\MyApp"; /* optional but recommended: absolute install root */
+    opts.temp_dir    = "C:\\ProgramData\\MyApp\\tmp"; /* optional: absolute base for download workdir */
 
     if (update_init(&opts) != UPDATE_OK)
         return 1;
@@ -87,7 +88,7 @@ int main(void)
     int status = update_perform();
 
     if (status == UPDATE_STARTED) {
-        /* updater is running; exit so it can replace files */
+        /* updater is running; exit so it can replace files and relaunch this app */
         return 0;
     }
 
@@ -100,16 +101,20 @@ int main(void)
 }
 ```
 
+If `install_dir` is omitted, the library defaults the install target to the **directory containing the running application executable** (so updates still work when the process current directory is unrelated to the install).
 ### Step-by-step update
 
 ```c
 #include <update.h>
+#include <stdio.h>
 
 int main(void)
 {
+    char zip_abs[4096];
     update_options_t opts = {0};
     opts.update_url = "https://example.com/update.json";
     opts.app_name   = "myapp";
+    opts.install_dir = "/opt/myapp"; /* optional; must be absolute if set */
 
     if (update_init(&opts) != UPDATE_OK)
         return 1;
@@ -120,16 +125,34 @@ int main(void)
     if (st == UPDATE_AVAILABLE) {
         printf("New version: %s\n", info.version);
 
-        if (update_download(info.download_url, "/tmp/update.zip") == UPDATE_OK) {
-            update_apply("/tmp/update.zip");
-            /* does not return on success */
-        }
+        /* update_download requires an absolute dest path */
+        if (update_path_make_absolute("/tmp/update.zip", zip_abs, sizeof zip_abs) != UPDATE_OK)
+            goto out;
+
+        if (update_download(info.download_url, zip_abs) != UPDATE_OK)
+            goto out;
+
+        /* Manifest checksum is not applied automatically in this path unless you set
+           opts.expected_sha256 at init; verify explicitly before apply: */
+        if (update_verify(zip_abs, info.checksum) != UPDATE_OK)
+            goto out;
+
+        /* update_apply absolutizes internally but pass a path you already validated */
+        update_apply(zip_abs);
+        /* does not return on success */
     }
 
+out:
     update_shutdown();
     return 0;
 }
 ```
+
+On Windows, use absolute paths such as `C:\\Users\\Public\\myapp-update.zip` (or run them through `update_path_make_absolute` first).
+
+### Optional: pin download digest via `update_init`
+
+If you already know the expected SHA-256 before downloading (e.g. second channel or cached manifest), set `opts.expected_sha256` in `update_init`; `update_download` will then verify the file and delete it on mismatch.
 
 ### Progress callback
 
@@ -146,7 +169,7 @@ update_set_download_progress_callback(on_progress, NULL);
 
 ## Platform notes
 
-- **Windows**: Uses WinHTTP (supports HTTPS natively).
+- **Windows**: Uses WinHTTP (HTTPS natively). If the updater lives under the install directory, install-root rename may fail; the built-in **mirror + in-place overlay** path handles that so updates still complete and the app relaunches.
 - **Linux/macOS**: Uses POSIX sockets with OpenSSL for HTTPS. If OpenSSL is not found at build time, only plain HTTP is available (a CMake warning is emitted).
 - HTTP redirects are not followed by either backend.
 

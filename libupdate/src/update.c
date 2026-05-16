@@ -456,12 +456,38 @@ UPDATE_API int update_download(const char *url, const char *dest_path)
     return UPDATE_OK;
 }
 
+#if defined(_WIN32) && !defined(__CYGWIN__)
+
+static int win_normalize_full_path(char *path, size_t cap)
+{
+    char buf[UPDATE_APPLY_PATH_MAX];
+    DWORD n;
+
+    if (path == NULL || cap == 0U) {
+        return -1;
+    }
+
+    n = GetFullPathNameA(path, (DWORD)sizeof(buf), buf, NULL);
+    if (n == 0U || n >= sizeof(buf)) {
+        return -1;
+    }
+
+    if (snprintf(path, cap, "%s", buf) >= (int)cap) {
+        return -1;
+    }
+
+    return 0;
+}
+
+#endif /* _WIN32 */
 static int update_apply_spawn(const char *package_path)
 {
     char exe_path[UPDATE_APPLY_PATH_MAX];
     char exe_dir[UPDATE_APPLY_PATH_MAX];
     char updater_path[UPDATE_APPLY_PATH_MAX];
     char install_buf[UPDATE_APPLY_PATH_MAX];
+    char inst_abs[UPDATE_APPLY_PATH_MAX];
+    char pkg_abs[UPDATE_APPLY_PATH_MAX];
     char pid_buf[32];
     char *pkg_copy = NULL;
     char *install_copy = NULL;
@@ -487,22 +513,42 @@ static int update_apply_spawn(const char *package_path)
         return -1;
     }
 
-    pkg_copy = dup_str(package_path);
-    if (pkg_copy == NULL) {
-        ctx_unlock();
-        return -1;
-    }
-
     if (s_ctx.install_dir != NULL && s_ctx.install_dir[0] != '\0') {
         install_copy = dup_str(s_ctx.install_dir);
         if (install_copy == NULL) {
-            free(pkg_copy);
             ctx_unlock();
             return -1;
         }
     }
-
     ctx_unlock();
+    if (update_path_make_absolute(package_path, pkg_abs, sizeof pkg_abs) != UPDATE_OK) {
+        free(install_copy);
+        return -1;
+    }
+    if (update_validate_path(pkg_abs, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
+        free(install_copy);
+        return -1;
+    }
+    pkg_copy = dup_str(pkg_abs);
+    if (pkg_copy == NULL) {
+        free(install_copy);
+        return -1;
+    }
+
+    if (install_copy != NULL) {
+        char inst_tmp[UPDATE_APPLY_PATH_MAX];
+        if (update_path_make_absolute(install_copy, inst_tmp, sizeof inst_tmp) != UPDATE_OK) {
+            free(pkg_copy);
+            free(install_copy);
+            return -1;
+        }
+        free(install_copy);
+        install_copy = dup_str(inst_tmp);
+        if (install_copy == NULL) {
+            free(pkg_copy);
+            return -1;
+        }
+    }
 
     if (platform_fs_get_executable_path(exe_path, sizeof exe_path) != PLATFORM_OK) {
         free(pkg_copy);
@@ -527,6 +573,11 @@ static int update_apply_spawn(const char *package_path)
         install_target = install_buf;
     }
 
+    if (snprintf(inst_abs, sizeof inst_abs, "%s", install_target) >= (int)sizeof inst_abs) {
+        free(pkg_copy);
+        free(install_copy);
+        return -1;
+    }
 #if defined(_WIN32) && !defined(__CYGWIN__)
     if (snprintf(updater_path, sizeof updater_path, "%s/updater.exe", exe_dir) >= (int)sizeof updater_path) {
         free(pkg_copy);
@@ -541,7 +592,44 @@ static int update_apply_spawn(const char *package_path)
     }
 #endif
 
-    if (update_validate_path(install_target, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    if (win_normalize_full_path(inst_abs, sizeof inst_abs) != 0 || win_normalize_full_path(exe_path, sizeof exe_path) != 0
+        || win_normalize_full_path(exe_dir, sizeof exe_dir) != 0
+        || win_normalize_full_path(updater_path, sizeof updater_path) != 0) {
+        free(pkg_copy);
+        free(install_copy);
+        return -1;
+    }
+#else
+    {
+        char t[UPDATE_APPLY_PATH_MAX];
+        if (update_path_make_absolute(inst_abs, t, sizeof t) != UPDATE_OK
+            || snprintf(inst_abs, sizeof inst_abs, "%s", t) >= (int)sizeof inst_abs) {
+            free(pkg_copy);
+            free(install_copy);
+            return -1;
+        }
+        if (update_path_make_absolute(exe_path, t, sizeof t) != UPDATE_OK
+            || snprintf(exe_path, sizeof exe_path, "%s", t) >= (int)sizeof exe_path) {
+            free(pkg_copy);
+            free(install_copy);
+            return -1;
+        }
+        if (update_path_make_absolute(exe_dir, t, sizeof t) != UPDATE_OK
+            || snprintf(exe_dir, sizeof exe_dir, "%s", t) >= (int)sizeof exe_dir) {
+            free(pkg_copy);
+            free(install_copy);
+            return -1;
+        }
+        if (update_path_make_absolute(updater_path, t, sizeof t) != UPDATE_OK
+            || snprintf(updater_path, sizeof updater_path, "%s", t) >= (int)sizeof updater_path) {
+            free(pkg_copy);
+            free(install_copy);
+            return -1;
+        }
+    }
+#endif
+    if (update_validate_path(inst_abs, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
         || update_validate_path(exe_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK
         || update_validate_path(updater_path, UPDATE_PATH_REQUIRE_ABSOLUTE) != UPDATE_OK) {
         free(pkg_copy);
@@ -559,14 +647,14 @@ static int update_apply_spawn(const char *package_path)
     spawn_argv[1] = "--install";
     spawn_argv[2] = pkg_copy;
     spawn_argv[3] = "--target";
-    spawn_argv[4] = install_target;
+    spawn_argv[4] = inst_abs;
     spawn_argv[5] = "--pid";
     spawn_argv[6] = pid_buf;
     spawn_argv[7] = "--app";
     spawn_argv[8] = exe_path;
     spawn_argv[9] = NULL;
 
-    spawn_rc = platform_process_spawn(updater_path, spawn_argv, &child_pid);
+    spawn_rc = platform_process_spawn_with_cwd(updater_path, spawn_argv, exe_dir, &child_pid);
     free(pkg_copy);
     free(install_copy);
 

@@ -23,6 +23,7 @@ extern void test_group_apply(void);
 extern void test_group_updater(void);
 extern void test_group_platform(void);
 extern void test_group_stress(void);
+extern void test_group_merge_overlay(void);
 
 int main(void)
 {
@@ -36,6 +37,7 @@ int main(void)
     test_group_updater();
     test_group_platform();
     test_group_stress();
+    test_group_merge_overlay();
 
     return UNITY_END();
 }

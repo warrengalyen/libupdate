@@ -12,6 +12,8 @@ extern "C" {
 /** Spawn process with NULL-terminated argv. Sets *out_pid on success. */
 int platform_process_spawn(const char *path, const char *const *argv, int *out_pid);
 
+int platform_process_spawn_with_cwd(const char *path, const char *const *argv, const char *cwd,
+    int *out_pid);
 int platform_process_get_current_pid(void);
 
 /** Block until pid exits. Optionally stores exit status in *out_exit_code. */

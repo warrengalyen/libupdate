@@ -3,6 +3,7 @@
 #include "platform_fs.h"
 #include "platform_process.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,20 +136,76 @@ static int copy_file_retries(const char *src, const char *dst)
 
 static int join_path2(const char *a, const char *b, char *out, size_t cap)
 {
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    int n = snprintf(out, cap, "%s\\%s", a, b);
+#else
     int n = snprintf(out, cap, "%s/%s", a, b);
+#endif
     if (n < 0 || (size_t)n >= cap) {
         return -1;
     }
     return 0;
 }
 
+#if !defined(_WIN32) || defined(__CYGWIN__)
+static int str_ieq_ascii(const char *a, const char *b)
+{
+    for (;;) {
+        unsigned char ca = (unsigned char)*a;
+        unsigned char cb = (unsigned char)*b;
+        if (tolower((int)ca) != tolower((int)cb)) {
+            return 0;
+        }
+        if (ca == '\0') {
+            return 1;
+        }
+        a++;
+        b++;
+    }
+}
+#endif
+static int stage_overlay_dst_leaf(const char *src_leaf, int overlay, char *out, size_t cap)
+{
+    if (overlay == 0) {
+        if (snprintf(out, cap, "%s", src_leaf) >= (int)cap) {
+            return -1;
+        }
+        return 0;
+    }
 #if defined(_WIN32) && !defined(__CYGWIN__)
+    if (_stricmp(src_leaf, "updater.exe") == 0) {
+        if (snprintf(out, cap, "updater_new.exe") >= (int)cap) {
+            return -1;
+        }
+        return 0;
+    }
+#else
+    if (str_ieq_ascii(src_leaf, "updater.exe") != 0) {
+        if (snprintf(out, cap, "updater_new.exe") >= (int)cap) {
+            return -1;
+        }
+        return 0;
+    }
+    if (str_ieq_ascii(src_leaf, "updater") != 0) {
+        if (snprintf(out, cap, "updater_new") >= (int)cap) {
+            return -1;
+        }
+        return 0;
+    }
+#endif
+    if (snprintf(out, cap, "%s", src_leaf) >= (int)cap) {
+        return -1;
+    }
+    return 0;
+}
 
-static int copy_tree_win(const char *src_dir, const char *dst_dir)
+#if defined(_WIN32) && !defined(__CYGWIN__)
+static int copy_tree_win(const char *src_dir, const char *dst_dir, int stage_overlay, int soft_file_copy)
 {
     char search[UPDATE_OPS_PATH_MAX];
     char src_path[UPDATE_OPS_PATH_MAX];
     char dst_path[UPDATE_OPS_PATH_MAX];
+    char dst_leaf[UPDATE_OPS_PATH_MAX];
     WIN32_FIND_DATAA fd;
     HANDLE h;
     int n;
@@ -164,33 +221,40 @@ static int copy_tree_win(const char *src_dir, const char *dst_dir)
 
     h = FindFirstFileA(search, &fd);
     if (h == INVALID_HANDLE_VALUE) {
-        return 0;
+        return -1;
     }
 
-    do {
+    for (;;) {
         if (fd.cFileName[0] == '.' && fd.cFileName[1] == '\0') {
-            continue;
+            goto next_entry;
         }
         if (fd.cFileName[0] == '.' && fd.cFileName[1] == '.' && fd.cFileName[2] == '\0') {
-            continue;
+            goto next_entry;
         }
 
         if (join_path2(src_dir, fd.cFileName, src_path, sizeof(src_path)) != 0) {
             FindClose(h);
             return -1;
         }
-        if (join_path2(dst_dir, fd.cFileName, dst_path, sizeof(dst_path)) != 0) {
-            FindClose(h);
-            return -1;
-        }
-
         if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) {
-            if (copy_tree_win(src_path, dst_path) != 0) {
+            if (join_path2(dst_dir, fd.cFileName, dst_path, sizeof(dst_path)) != 0) {
+                FindClose(h);
+                return -1;
+            }
+            if (copy_tree_win(src_path, dst_path, stage_overlay, soft_file_copy) != 0) {
                 FindClose(h);
                 return -1;
             }
         } else {
             unsigned a;
+            if (stage_overlay_dst_leaf(fd.cFileName, stage_overlay, dst_leaf, sizeof(dst_leaf)) != 0) {
+                FindClose(h);
+                return -1;
+            }
+            if (join_path2(dst_dir, dst_leaf, dst_path, sizeof(dst_path)) != 0) {
+                FindClose(h);
+                return -1;
+            }
             for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
                 if (CopyFileA(src_path, dst_path, FALSE) != 0) {
                     break;
@@ -198,14 +262,23 @@ static int copy_tree_win(const char *src_dir, const char *dst_dir)
                 sleep_ms(UPDATE_OPS_RETRY_MS);
             }
             if (a >= UPDATE_OPS_RETRIES) {
+                if (soft_file_copy != 0) {
+                    goto next_entry;
+                }
                 FindClose(h);
                 return -1;
             }
         }
-    } while (FindNextFileA(h, &fd) != 0);
-
+    next_entry:
+        if (FindNextFileA(h, &fd) == 0) {
+            DWORD e = GetLastError();
     FindClose(h);
+            if (e != ERROR_NO_MORE_FILES) {
+                return -1;
+            }
     return 0;
+        }
+    }
 }
 
 #else /* POSIX */
@@ -219,7 +292,7 @@ static int is_dir_posix(const char *path)
     return S_ISDIR(st.st_mode) ? 1 : 0;
 }
 
-static int copy_tree_posix(const char *src_dir, const char *dst_dir)
+static int copy_tree_posix(const char *src_dir, const char *dst_dir, int stage_overlay, int soft_file_copy)
 {
     DIR *d;
     struct dirent *ent;
@@ -254,23 +327,34 @@ static int copy_tree_posix(const char *src_dir, const char *dst_dir)
         {
             char src_path[UPDATE_OPS_PATH_MAX];
             char dst_path[UPDATE_OPS_PATH_MAX];
+            char dst_leaf[UPDATE_OPS_PATH_MAX];
 
             if (join_path2(src_dir, ent->d_name, src_path, sizeof(src_path)) != 0) {
                 err = -1;
                 break;
             }
-            if (join_path2(dst_dir, ent->d_name, dst_path, sizeof(dst_path)) != 0) {
-                err = -1;
-                break;
-            }
-
             if (is_dir_posix(src_path) != 0) {
-                if (copy_tree_posix(src_path, dst_path) != 0) {
+                if (join_path2(dst_dir, ent->d_name, dst_path, sizeof(dst_path)) != 0) {
+                    err = -1;
+                    break;
+                }
+                if (copy_tree_posix(src_path, dst_path, stage_overlay, soft_file_copy) != 0) {
                     err = -1;
                     break;
                 }
             } else {
+                if (stage_overlay_dst_leaf(ent->d_name, stage_overlay, dst_leaf, sizeof(dst_leaf)) != 0) {
+                    err = -1;
+                    break;
+                }
+                if (join_path2(dst_dir, dst_leaf, dst_path, sizeof(dst_path)) != 0) {
+                    err = -1;
+                    break;
+                }
                 if (copy_file_retries(src_path, dst_path) != 0) {
+                    if (soft_file_copy != 0) {
+                        continue;
+                    }
                     err = -1;
                     break;
                 }
@@ -294,11 +378,11 @@ UPDATE_API int update_copy_tree(const char *src_dir, const char *dst_dir)
 
     for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
 #if defined(_WIN32) && !defined(__CYGWIN__)
-        if (copy_tree_win(src_dir, dst_dir) == 0) {
+        if (copy_tree_win(src_dir, dst_dir, 0, 0) == 0) {
             return UPDATE_OK;
         }
 #else
-        if (copy_tree_posix(src_dir, dst_dir) == 0) {
+        if (copy_tree_posix(src_dir, dst_dir, 0, 0) == 0) {
             return UPDATE_OK;
         }
 #endif
@@ -306,6 +390,85 @@ UPDATE_API int update_copy_tree(const char *src_dir, const char *dst_dir)
     }
 
     return UPDATE_ERROR;
+}
+UPDATE_API int update_copy_tree_best_effort(const char *src_dir, const char *dst_dir)
+{
+    unsigned a;
+
+    if (src_dir == NULL || src_dir[0] == '\0' || dst_dir == NULL || dst_dir[0] == '\0') {
+        return UPDATE_ERROR;
+    }
+
+    for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
+#if defined(_WIN32) && !defined(__CYGWIN__)
+        if (copy_tree_win(src_dir, dst_dir, 0, 1) == 0) {
+            return UPDATE_OK;
+        }
+#else
+        if (copy_tree_posix(src_dir, dst_dir, 0, 1) == 0) {
+            return UPDATE_OK;
+        }
+#endif
+        sleep_ms(UPDATE_OPS_RETRY_MS);
+    }
+
+    return UPDATE_ERROR;
+}
+
+UPDATE_API int update_copy_tree_stage_overlay(const char *src_dir, const char *dst_dir)
+{
+    unsigned a;
+
+    if (src_dir == NULL || src_dir[0] == '\0' || dst_dir == NULL || dst_dir[0] == '\0') {
+        return UPDATE_ERROR;
+    }
+    for (a = 0U; a < UPDATE_OPS_RETRIES; a++) {
+#if defined(_WIN32) && !defined(__CYGWIN__)
+        if (copy_tree_win(src_dir, dst_dir, 1, 0) == 0) {
+            return UPDATE_OK;
+        }
+#else
+        if (copy_tree_posix(src_dir, dst_dir, 1, 0) == 0) {
+            return UPDATE_OK;
+        }
+#endif
+        sleep_ms(UPDATE_OPS_RETRY_MS);
+    }
+    return UPDATE_ERROR;
+}
+UPDATE_API int update_recreate_install_from_backup(const char *install_dir, const char *backup_dir)
+{
+    if (install_dir == NULL || install_dir[0] == '\0' || backup_dir == NULL || backup_dir[0] == '\0') {
+        return UPDATE_ERROR;
+    }
+
+    if (platform_fs_create_directory_recursive(install_dir) != PLATFORM_OK) {
+        return UPDATE_ERROR;
+    }
+
+    if (update_copy_tree(backup_dir, install_dir) != UPDATE_OK) {
+        return UPDATE_ERROR;
+    }
+
+    return UPDATE_OK;
+}
+
+UPDATE_API int update_merge_overlay_install(const char *install_dir, const char *backup_dir, const char *staging_dir)
+{
+    if (install_dir == NULL || install_dir[0] == '\0' || backup_dir == NULL || backup_dir[0] == '\0' || staging_dir == NULL
+        || staging_dir[0] == '\0') {
+        return UPDATE_ERROR;
+    }
+
+    if (update_recreate_install_from_backup(install_dir, backup_dir) != UPDATE_OK) {
+        return UPDATE_ERROR;
+    }
+
+    if (update_copy_tree_stage_overlay(staging_dir, install_dir) != UPDATE_OK) {
+        return UPDATE_ERROR;
+    }
+
+    return UPDATE_OK;
 }
 
 UPDATE_API int update_remove_tree(const char *path)

@@ -172,6 +172,7 @@ static void test_perform_child_updates_install_tree(void)
 
     TEST_ASSERT_EQUAL_INT(0, test_env_join(hello, sizeof hello, "pf_install/hello.txt"));
     TEST_ASSERT_EQUAL_INT(0, wait_file_exists(hello, 150U, 100U));
+    TEST_ASSERT_EQUAL_INT(0, wait_file_exists(marker, 150U, 100U));
 
     clear_env_key("LIBUPDATE_PERF_URL");
     clear_env_key("LIBUPDATE_PERF_INSTALL");

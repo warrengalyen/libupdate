@@ -97,6 +97,7 @@ set(LIBUPDATE_TEST_SOURCES
     test_download.c
     test_apply.c
     test_updater.c
+    test_merge_overlay.c
     test_platform.c
     test_stress.c
 )

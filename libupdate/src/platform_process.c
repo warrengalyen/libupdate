@@ -197,13 +197,15 @@ static int win_build_cmdline(const char *const *argv, char **out_cmdline)
     return PLATFORM_OK;
 }
 
-int platform_process_spawn(const char *path, const char *const *argv, int *out_pid)
+int platform_process_spawn_with_cwd(const char *path, const char *const *argv, const char *cwd,
+    int *out_pid)
 {
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     char *cmdline;
     int build_rc;
     DWORD flags;
+    const char *dir_arg;
 
     if (path == NULL || path[0] == '\0' || argv == NULL || out_pid == NULL) {
         return PLATFORM_ERR_INVALID_ARG;
@@ -219,7 +221,8 @@ int platform_process_spawn(const char *path, const char *const *argv, int *out_p
     memset(&pi, 0, sizeof(pi));
 
     flags = 0;
-    if (CreateProcessA(path, cmdline, NULL, NULL, FALSE, flags, NULL, NULL, &si, &pi) == 0) {
+    dir_arg = (cwd != NULL && cwd[0] != '\0') ? cwd : NULL;
+    if (CreateProcessA(path, cmdline, NULL, NULL, FALSE, flags, NULL, dir_arg, &si, &pi) == 0) {
         free(cmdline);
         return PLATFORM_ERR_IO;
     }
@@ -230,6 +233,10 @@ int platform_process_spawn(const char *path, const char *const *argv, int *out_p
 
     *out_pid = (int)pi.dwProcessId;
     return PLATFORM_OK;
+}
+int platform_process_spawn(const char *path, const char *const *argv, int *out_pid)
+{
+    return platform_process_spawn_with_cwd(path, argv, NULL, out_pid);
 }
 
 int platform_process_get_current_pid(void)
@@ -278,7 +285,8 @@ int platform_process_wait_for_pid_exit(int pid, int *out_exit_code)
 
 #else /* POSIX */
 
-int platform_process_spawn(const char *path, const char *const *argv, int *out_pid)
+int platform_process_spawn_with_cwd(const char *path, const char *const *argv, const char *cwd,
+    int *out_pid)
 {
     pid_t pid;
     size_t n;
@@ -343,6 +351,9 @@ int platform_process_spawn(const char *path, const char *const *argv, int *out_p
         (void)signal(SIGPIPE, SIG_DFL);
         (void)close(pfd[0]);
         (void)fcntl(pfd[1], F_SETFD, FD_CLOEXEC);
+        if (cwd != NULL && cwd[0] != '\0') {
+            (void)chdir(cwd);
+        }
         (void)execv(path, av);
         probe = 1;
         (void)write(pfd[1], &probe, 1);
@@ -375,6 +386,10 @@ int platform_process_spawn(const char *path, const char *const *argv, int *out_p
 
     *out_pid = (int)pid;
     return PLATFORM_OK;
+}
+int platform_process_spawn(const char *path, const char *const *argv, int *out_pid)
+{
+    return platform_process_spawn_with_cwd(path, argv, NULL, out_pid);
 }
 
 int platform_process_get_current_pid(void)
