@@ -135,6 +135,7 @@ static void test_check_and_download_from_mock_server(void)
     TEST_ASSERT_TRUE(strlen(info.checksum) > 0U);
 
     TEST_ASSERT_EQUAL_INT(UPDATE_OK, update_download(info.download_url, dl));
+    update_info_free(&info);
     fp = fopen(dl, "rb");
     TEST_ASSERT_NOT_NULL(fp);
     TEST_ASSERT_TRUE(fread(sig, 1U, sizeof sig, fp) > 0U);

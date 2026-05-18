@@ -91,6 +91,7 @@ configure_file(
 set(LIBUPDATE_TEST_SOURCES
     test_main.c
     test_helpers.c
+    test_release_notes.c
     test_update_init.c
     test_verify.c
     test_extract.c

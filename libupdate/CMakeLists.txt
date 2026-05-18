@@ -6,6 +6,7 @@ add_library(update SHARED
     src/update.c
     src/update_path.c
     src/update_remote_check.c
+    src/update_html.c
     src/update_ops.c
     src/update_extract.c
     src/json_mini.c

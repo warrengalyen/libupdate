@@ -395,6 +395,40 @@ UPDATE_API int update_check(update_info_t *out)
     return rc;
 }
 
+UPDATE_API void update_info_free(update_info_t *info)
+{
+    if (info == NULL) {
+        return;
+    }
+
+    free(info->description);
+    memset(info, 0, sizeof(*info));
+}
+
+UPDATE_API const char *update_get_description_format(const update_info_t *info)
+{
+    if (info == NULL || info->description_format[0] == '\0') {
+        return "plaintext";
+    }
+    return info->description_format;
+}
+
+UPDATE_API const char *update_get_description(const update_info_t *info)
+{
+    if (info == NULL || info->description == NULL) {
+        return "";
+    }
+    return info->description;
+}
+
+UPDATE_API int update_description_is_html(const update_info_t *info)
+{
+    if (info == NULL) {
+        return 0;
+    }
+    return strcmp(info->description_format, "html") == 0 ? 1 : 0;
+}
+
 UPDATE_API int update_download(const char *url, const char *dest_path)
 {
     char *url_copy = NULL;
@@ -772,6 +806,7 @@ UPDATE_API int update_perform(void)
 
     dl_url = dup_str(info.download_url);
     checksum_copy = dup_str(info.checksum);
+    update_info_free(&info);
     if (dl_url == NULL || checksum_copy == NULL) {
         free(dl_url);
         free(checksum_copy);

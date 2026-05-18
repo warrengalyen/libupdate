@@ -30,11 +30,19 @@ typedef struct {
     const char *expected_sha256; /* optional: 64-char hex SHA-256 for download verification */
 } update_options_t;
 
-/** Populated by update_check on UPDATE_AVAILABLE. */
+/**
+ * Populated by update_check on success (including UPDATE_NOT_AVAILABLE).
+ * Always call update_info_free when the struct is no longer needed (frees description).
+ */
 typedef struct {
     char version[32];
-    char download_url[2048];
+    char download_url[512];
     char checksum[65];
+
+    /** Normalized: "plaintext" or "html". */
+    char description_format[16];
+    /** Owned pointer; may be NULL if the manifest omits description. */
+    char *description;
 } update_info_t;
 
 typedef enum {
@@ -103,8 +111,26 @@ UPDATE_API int update_init(const update_options_t *opts);
 /** Release resources and allow re-initialization via update_init. */
 UPDATE_API void update_shutdown(void);
 
-/** Fetch remote manifest and compare versions. Populates out on UPDATE_AVAILABLE. */
+/** Fetch remote manifest and compare versions. Populates out on success; free with update_info_free. */
 UPDATE_API int update_check(update_info_t *out);
+
+/**
+ * Parse a manifest JSON body (e.g. after a custom fetch). Required keys: version, download_url, checksum.
+ * Optional: description_format, description. Returns 0 on success. Always call update_info_free when done.
+ */
+UPDATE_API int update_manifest_parse(const char *body_json, update_info_t *out);
+
+/** Free heap fields in info (safe to call with NULL or zeroed struct). */
+UPDATE_API void update_info_free(update_info_t *info);
+
+/** Normalized format string ("plaintext" or "html"); empty if unknown. */
+UPDATE_API const char *update_get_description_format(const update_info_t *info);
+
+/** Release notes text, or "" if NULL internally. */
+UPDATE_API const char *update_get_description(const update_info_t *info);
+
+/** Nonzero if description is sanitized HTML suitable for native HTML views. */
+UPDATE_API int update_description_is_html(const update_info_t *info);
 
 /** Download url to dest_path. Verifies SHA-256 if expected_sha256 was set in options. */
 UPDATE_API int update_download(const char *url, const char *dest_path);

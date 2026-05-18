@@ -11,4 +11,16 @@ const char *json_mini_skip_ws(const char *p);
  */
 int json_mini_extract_string(const char *json, const char *key, char *out, size_t outcap);
 
+/**
+ * Optional string: returns 0 on success.
+ * *present_out: 1 if key found and parsed, 0 if key absent (out[0]='\0'), -1 malformed (return -1).
+ */
+int json_mini_extract_string_opt(const char *json, const char *key, char *out, size_t outcap, int *present_out);
+
+/**
+ * Allocates extracted string (caller frees). Key absent: *out_alloc=NULL, return 0.
+ * max_value_len excludes NUL; longer values or OOM return -1.
+ */
+int json_mini_extract_string_alloc(const char *json, const char *key, size_t max_value_len, char **out_alloc);
+
 #endif /* JSON_MINI_H */

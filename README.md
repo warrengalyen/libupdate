@@ -16,9 +16,24 @@ The remote URL should serve a JSON object:
 {
   "version": "1.2.0",
   "download_url": "https://example.com/releases/app-1.2.0.zip",
-  "checksum": "a3f1c6...64-char hex SHA-256..."
+  "checksum": "a3f1c6...64-char hex SHA-256...",
+  "description_format": "html",
+  "description": "<b>New Features</b><br><ul><li>Faster startup</li></ul>"
 }
 ```
+
+Required keys are `version`, `download_url`, and `checksum`.
+
+Optional rich-text release notes:
+
+| Key | Meaning |
+|-----|---------|
+| `description_format` | Omit or `plaintext` for plain text (HTML special characters are escaped). Use `html` for a **restricted** tag subset (`b`, `i`, `u`, `br`, `p`, `ul`, `ol`, `li`, `a`, `span`). Other markup and unsafe URLs/attributes are stripped. Unknown formats are treated as plaintext. |
+| `description` | Release notes string (large payloads are capped; see implementation). |
+
+The library **does not render** HTML; it parses the manifest, sanitizes or escapes `description`, and exposes it via `update_info_t`. Your UI renders the result with its native HTML or text widget.
+
+`download_url` is capped by the `update_info_t` field size (512 bytes including the terminating NUL). If you fetch the manifest yourself, you can use **`update_manifest_parse`** on the JSON body and then **`update_info_free`** when done.
 
 ## Building
 
@@ -143,6 +158,7 @@ int main(void)
     }
 
 out:
+    update_info_free(&info);
     update_shutdown();
     return 0;
 }
